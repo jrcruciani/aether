@@ -113,8 +113,7 @@ For anything at R3, set a dead man's switch before applying.
 
 ```bash
 # 1. Arm
-systemd-run --collect --unit=deadman-rollback \
-  --on-active=10min nixos-rebuild switch --rollback
+aether-arm 10min
 
 # 2. Activate without persisting
 systemd-run --scope --collect --unit=rb-$(date +%s) \
@@ -124,10 +123,17 @@ systemd-run --scope --collect --unit=rb-$(date +%s) \
 #    Confirm you can still get in.
 
 # 4. Only now, disarm and persist
-systemctl stop deadman-rollback.timer
+aether-disarm
 systemd-run --scope --collect --unit=rb-$(date +%s) \
   nixos-rebuild switch --flake .#vps
 ```
+
+`aether-arm` comes from `services.aether.enable`, the module in `modules/deadman.nix`.
+Earlier versions of this playbook told you to arm the timer with a `systemd-run` line
+calling `nixos-rebuild switch --rollback`. Do not do that. It re-evaluates the flake
+and derives the configuration name from the hostname, so unless those two names
+happen to match it fails when it fires, which is the worst possible time to find out.
+See `docs/FIELD-NOTES-rollback-timer-2026-09.md`.
 
 Two independent safety nets are running here. The timer reverts the machine on its
 own if you vanish. And `test` does not write the boot default, so a reboot returns

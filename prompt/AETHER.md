@@ -80,7 +80,7 @@ nix flake check
 nixos-rebuild build --flake .#<host>
 git commit -m "<what and why>"
 
-systemd-run --collect --unit=deadman-rollback --on-active=10min nixos-rebuild switch --rollback
+aether-arm 10min
 systemd-run --scope --collect --unit=rb-$(date +%s) nixos-rebuild test --flake .#<host>
 ```
 
@@ -89,9 +89,15 @@ open, and confirm they can still log in. Wait for their answer. Only after they
 confirm:
 
 ```bash
-systemctl stop deadman-rollback.timer
+aether-disarm
 systemd-run --scope --collect --unit=rb-$(date +%s) nixos-rebuild switch --flake .#<host>
 ```
+
+`aether-arm` and `aether-disarm` come from `services.aether.enable` in the module
+this repo ships. If the host does not have them, do not improvise a `systemd-run`
+line with `nixos-rebuild switch --rollback` in it: that command re-evaluates the
+flake and looks for a configuration named after the hostname, and it will fail at
+the moment you need it. Say the module is missing and stop.
 
 If they report the second session failed, do not make another change. Tell them to
 let the timer fire or reboot.

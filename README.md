@@ -40,17 +40,19 @@ hardware that is not there. But we do have all these Von Neumann machines around
 
 ## Status
 
-Alpha, and very. The playbook runs on one VPS. R1 has been through the full
-pipeline end to end, with the output written down in
-[docs/FIELD-NOTES-first-change-2026-09.md](docs/FIELD-NOTES-first-change-2026-09.md);
-that run found two bugs in these instructions and added a step nobody had thought
-of. R3 and R4 have not been exercised against anything except a careful reading.
+Alpha, and very. The playbook runs on one VPS. R1 and R2 have been through the full
+pipeline end to end, and the rollback timer has been armed and allowed to fire three
+times, which is how two bugs in it were found. Those runs are written down in
+[docs/FIELD-NOTES-first-change-2026-09.md](docs/FIELD-NOTES-first-change-2026-09.md)
+and
+[docs/FIELD-NOTES-rollback-timer-2026-09.md](docs/FIELD-NOTES-rollback-timer-2026-09.md).
+R3 and R4 have not been exercised against anything except a careful reading.
 It has not been through a hundred hostile configurations. If you point it at
 something you care about without reading it first, that is on you.
 
-What exists today: the safety protocol, the system prompt, the rescue runbook, and
-worked examples. What does not exist: a packaged binary, a test suite, multi-host
-support.
+What exists today: the safety protocol, the system prompt, the rescue runbook,
+worked examples, and a NixOS module packaging the rollback timer. What does not
+exist: a CLI, a test suite, multi-host support.
 
 ## Why bother
 
@@ -103,17 +105,45 @@ is not fixed by rolling back, because the thing you would roll back with is gone
 ## The rollback timer
 
 This is the piece I would keep even if you threw the rest away. Before applying
-anything that touches the network:
+anything that touches the network, arm it:
 
 ```bash
-systemd-run --collect --unit=deadman-rollback \
-  --on-active=10min nixos-rebuild switch --rollback
+aether-arm 10min
 ```
 
-Then apply the change. If you can still log in, you stop the timer. If you cannot,
-the machine reverts itself in ten minutes without you finding the console password
-you wrote down eighteen months ago. It costs one line and it removes most of the
-fear from remote firewall edits.
+Then apply the change. If you can still log in, `aether-disarm`. If you cannot, the
+machine reverts itself in ten minutes without you finding the console password you
+wrote down eighteen months ago. It removes most of the fear from remote firewall
+edits.
+
+It used to be a `systemd-run` line in this README that you were expected to paste
+correctly from memory, in the one situation where you are least calm. Now it is a
+NixOS module:
+
+```nix
+{
+  inputs.aether.url = "github:jrcruciani/aether";
+
+  # in your nixosSystem, with aether passed through specialArgs
+  imports = [ aether.nixosModules.aether ];
+  services.aether = {
+    enable = true;
+    rollbackTimeout = "10min";
+  };
+}
+```
+
+That gives you `aether-arm`, `aether-disarm` and `aether-status`. Nothing runs in
+the background and nothing touches your configuration on its own.
+
+The line this README used to tell you to paste did not work. It called
+`nixos-rebuild switch --rollback`, which re-evaluates your flake and looks for a
+configuration named after the hostname, so it failed on the first live test and left
+the system exactly where it was. The module rolls back without evaluating anything.
+Full story in
+[docs/FIELD-NOTES-rollback-timer-2026-09.md](docs/FIELD-NOTES-rollback-timer-2026-09.md),
+including the second attempt, which rolled back the profile and then died before
+activating it.
 
 ## Getting started
 
