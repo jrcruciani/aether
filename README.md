@@ -2,20 +2,18 @@
 
 An operating system you configure by talking to it.
 
-Aether is not a program you install. It is a playbook: a set of rules, prompts and
+Aether is not a program you install but rather a playbook: a set of rules, prompts and
 guardrails that turn any competent LLM agent into something you can trust with root
-on a NixOS box. You say "put a Postgres on this machine, only reachable from my
-laptop". The agent writes a Nix module, compiles it, shows you the diff, applies it,
-and if the change locks you out the machine rolls itself back before you finish
-swearing.
+on a NixOS box. You just say "I need a Postgres database on this machine, only reachable from my
+laptop" and the agent should write a Nix module, compiles it, show you the diff, apply it,
+and (if the change locks you out the machine) roll itself back before you panic.
 
-The interesting part is not that an AI writes config. It is that NixOS makes the
-blast radius small enough that letting it do so stops being reckless.
+The idea is to make the blast radius small enough that letting it roll stops being reckless.
 
 ## Status
 
-Alpha, and honest about it. The playbook is written and in daily use on a single
-Hetzner VPS. It has not been through a hundred hostile configurations. If you point
+Alpha, and very. The playbook is written and in daily use on a single VPS. 
+It has not been through a hundred hostile configurations. If you point
 it at something you care about without reading it first, that is on you.
 
 What exists today: the safety protocol, the system prompt, the rescue runbook, and
@@ -34,8 +32,7 @@ Old generations stick around in the bootloader. So you can constrain the model t
 something far narrower than "run commands": produce a declarative module, and let
 Nix decide whether it is valid. The model proposes. Nix judges. You confirm.
 
-That constraint is the whole design. Everything else in this repo is bookkeeping
-around it.
+Besides, don't you want a self-configuring OS? Such a cool idea!
 
 ## How it works
 
@@ -105,19 +102,19 @@ own loop will all work.
 
 ## What Aether is not
 
-Not autonomous. It plans and proposes and waits. If you want a server that
-administers itself while you sleep, this will disappoint you on purpose.
+It's not autonomous, yet. It plans and proposes and waits. If you want a server that
+administers itself while you sleep, this will disappoint you on purpose, at least in it's current iteration.
 
-Not a substitute for reading your config. If you cannot read the module, do not
+This is not a substitute for reading your config. If you cannot read the module, do not
 approve it. The syntax gate catches malformed Nix, not bad ideas.
 
-Not a package. There is no binary and no daemon. Some of this will probably become
+It's not yet a package. There is no binary and no daemon. Some of this will probably become
 tooling later, but the rules matter more than the wrapper, and rules ship faster.
 
 ## Prior art
 
-I did not invent this and it would be dishonest to imply otherwise. Two projects got
-here first and both are worth your time:
+As usual I thought I had a unique idea at first but a little digging turned out some very nice previous works.
+Two projects got here first and both are worth your time:
 
 - [nix-agent](https://github.com/ph0xphene/nix-agent) by ph0xphene. Rust CLI, strict
   plan and apply split, never lets the model emit shell commands. The risk tiers and
