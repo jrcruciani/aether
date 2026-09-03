@@ -14,6 +14,27 @@
 let
   cfg = config.services.aether;
 
+  # Rolls back without evaluating anything. `nixos-rebuild switch --rollback`
+  # re-evaluates the flake and derives the configuration name from the
+  # hostname, which fails whenever your configuration is named something else.
+  # Discovered the hard way: the timer fired, the rollback errored out, and
+  # the system stayed exactly where it was. A deadman switch that fails when
+  # it fires is worse than none, because you were counting on it.
+  rollbackScript = pkgs.writeShellApplication {
+    name = "aether-rollback";
+    runtimeInputs = [ pkgs.nix pkgs.systemd ];
+    text = ''
+      profile=/nix/var/nix/profiles/system
+
+      nix-env --profile "$profile" --rollback
+
+      target=$(readlink -f "$profile")
+      echo "aether: rolling back to $target"
+
+      "$target"/bin/switch-to-configuration switch
+    '';
+  };
+
   arm = pkgs.writeShellApplication {
     name = "aether-arm";
     runtimeInputs = [ pkgs.systemd ];
@@ -98,12 +119,20 @@ in
 
     rollbackCommand = lib.mkOption {
       type = lib.types.str;
-      default = "${config.system.build.nixos-rebuild}/bin/nixos-rebuild switch --rollback";
+      default = "${rollbackScript}/bin/aether-rollback";
       description = ''
-        What the timer runs when it fires. The default returns the system to
-        the previous generation. An absolute store path on purpose: if the
-        change you are testing breaks PATH, a bare command name is exactly
-        the kind of thing that stops resolving.
+        What the timer runs when it fires. The default rolls the system
+        profile back one generation and activates it directly, without
+        evaluating your flake.
+
+        That last part is not a detail. `nixos-rebuild switch --rollback`
+        looks like the obvious command and it is a trap: it re-evaluates the
+        flake and looks for a configuration named after the machine's
+        hostname. If your configuration is named anything else, which is
+        normal, the rollback fails at the exact moment you need it, and it
+        fails on a box you have just locked yourself out of. Activating a
+        generation that is already built on disk has nothing left to
+        evaluate and nothing left to get wrong.
       '';
     };
   };
