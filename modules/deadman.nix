@@ -22,7 +22,7 @@ let
   # it fires is worse than none, because you were counting on it.
   rollbackScript = pkgs.writeShellApplication {
     name = "aether-rollback";
-    runtimeInputs = [ pkgs.nix pkgs.systemd ];
+    runtimeInputs = [ pkgs.nix pkgs.systemd pkgs.coreutils ];
     text = ''
       profile=/nix/var/nix/profiles/system
 
