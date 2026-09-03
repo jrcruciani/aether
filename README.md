@@ -1,23 +1,22 @@
 # Aether
 
 An operating system you configure by talking to it.
+AI lives alongside the OS itself, transforming your intentions into declarative operations that reconfigure the OS on demand.
 
-Aether is not a program you install but rather a playbook: a set of rules, prompts and
+You just say "I need a Postgres database on this machine, only reachable from my
+laptop" and the agent writes a Nix module, compiles it, show you the diff, applies it...
+or, if the change locks you out the machine, rolls itself back before you panic.
+
+Aether is playbook, a set of rules, prompts and
 guardrails that turn any competent LLM agent into something you can trust with root
-on a NixOS box. You just say "I need a Postgres database on this machine, only reachable from my
-laptop" and the agent should write a Nix module, compiles it, show you the diff, apply it,
-and (if the change locks you out the machine) roll itself back before you panic.
-
-The idea is to make the blast radius small enough that letting it roll stops being reckless.
+on a NixOS box. The idea is to make the blast radius small enough that letting it roll stops being reckless.
 
 ## The longer bet
-
-Safety is what makes Aether usable. It is not why I think it is worth building.
 
 Every few years someone argues we should go back to devices that do one thing well.
 Buy the e-reader, buy the camera, buy the dedicated box, because the machine that
 does everything does all of it adequately and none of it properly. The complaint is
-fair. The usual fix is not: it means owning fifteen objects and binning fourteen of
+valid but the fix is not: it means owning fifteen objects and binning fourteen of
 them the moment your needs shift.
 
 There is another way to read the same complaint. The specialisation does not have to
@@ -27,18 +26,17 @@ one machine wearing two configurations, each of them a file you can read and a b
 entry you can go back to. A five euro VPS is a mail server this week and a git host
 next month, and undoing that is picking an older generation from a menu.
 
-That much is not new. Software defined networking did it to routers, virtualisation
-did it to physical servers, immutable infrastructure has been doctrine since roughly
-2013. What changes is the trigger. Reshaping a machine has always meant writing the
+The idea is not new. Software defined networking did it to routers, virtualisation
+did it to physical servers, immutable infrastructure has been doctrine since the early
+2010s. What changes now is the interaction. Reshaping a machine has always meant writing the
 description yourself, which is a real skill and a real afternoon. When the trigger is
-a sentence you say out loud, that cost drops far enough to change what you bother
+a sentence you write, that cost drops far enough to change what you bother
 reshaping at all. You stop asking which computer to buy and start asking what you
 want this one to be today.
 
-The honest limit: this only reaches what is already programmable. A glucose monitor
+Of course this only reaches what is already programmable. A glucose monitor
 needs a sensor, an e-reader needs e-ink, and no amount of declarative config conjures
-hardware that is not there. Aether does not make specialised devices obsolete. It
-makes most of the ones you were about to buy unnecessary.
+hardware that is not there. But we do have all these Von Neumann machines around and can leverage that.
 
 ## Status
 
