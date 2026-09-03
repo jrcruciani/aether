@@ -10,6 +10,36 @@ and (if the change locks you out the machine) roll itself back before you panic.
 
 The idea is to make the blast radius small enough that letting it roll stops being reckless.
 
+## The longer bet
+
+Safety is what makes Aether usable. It is not why I think it is worth building.
+
+Every few years someone argues we should go back to devices that do one thing well.
+Buy the e-reader, buy the camera, buy the dedicated box, because the machine that
+does everything does all of it adequately and none of it properly. The complaint is
+fair. The usual fix is not: it means owning fifteen objects and binning fourteen of
+them the moment your needs shift.
+
+There is another way to read the same complaint. The specialisation does not have to
+live in the hardware. A laptop that becomes a photo editing station in the morning
+and a build server in the afternoon is not a compromise between two machines. It is
+one machine wearing two configurations, each of them a file you can read and a boot
+entry you can go back to. A five euro VPS is a mail server this week and a git host
+next month, and undoing that is picking an older generation from a menu.
+
+That much is not new. Software defined networking did it to routers, virtualisation
+did it to physical servers, immutable infrastructure has been doctrine since roughly
+2013. What changes is the trigger. Reshaping a machine has always meant writing the
+description yourself, which is a real skill and a real afternoon. When the trigger is
+a sentence you say out loud, that cost drops far enough to change what you bother
+reshaping at all. You stop asking which computer to buy and start asking what you
+want this one to be today.
+
+The honest limit: this only reaches what is already programmable. A glucose monitor
+needs a sensor, an e-reader needs e-ink, and no amount of declarative config conjures
+hardware that is not there. Aether does not make specialised devices obsolete. It
+makes most of the ones you were about to buy unnecessary.
+
 ## Status
 
 Alpha, and very. The playbook is written and in daily use on a single VPS. 
