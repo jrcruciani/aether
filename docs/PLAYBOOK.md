@@ -160,6 +160,17 @@ nix-build -E '(import <nixpkgs/nixos> { configuration = {}; }).config.system.bui
   -o /var/lib/nixos-options
 ```
 
+That `-o` flag writes a symlink to a build output *directory*, not to a file, so the
+JSON you actually want to grep is one level down:
+
+```bash
+grep -o '"services.openssh.enable"' \
+  /var/lib/nixos-options/share/doc/nixos/options.json
+```
+
+Worth stating plainly because pointing an agent at the top-level path just gives it
+`IsADirectoryError` and it will improvise from there.
+
 Regenerate after every flake.lock bump. Grepping this file before writing a module
 costs a second and catches errors the syntax gate cannot.
 

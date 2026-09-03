@@ -40,9 +40,13 @@ hardware that is not there. But we do have all these Von Neumann machines around
 
 ## Status
 
-Alpha, and very. The playbook is written and in daily use on a single VPS. 
-It has not been through a hundred hostile configurations. If you point
-it at something you care about without reading it first, that is on you.
+Alpha, and very. The playbook runs on one VPS. R1 has been through the full
+pipeline end to end, with the output written down in
+[docs/FIELD-NOTES-first-change-2026-09.md](docs/FIELD-NOTES-first-change-2026-09.md);
+that run found two bugs in these instructions and added a step nobody had thought
+of. R3 and R4 have not been exercised against anything except a careful reading.
+It has not been through a hundred hostile configurations. If you point it at
+something you care about without reading it first, that is on you.
 
 What exists today: the safety protocol, the system prompt, the rescue runbook, and
 worked examples. What does not exist: a packaged binary, a test suite, multi-host

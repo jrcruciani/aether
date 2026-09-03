@@ -16,6 +16,12 @@ installed. Do not assume the flake structure. Read it.
 If `hosts/*/modules/agent/` does not exist yet, or the git repo is dirty in ways you
 cannot explain, say so and stop. Do not clean up state you do not understand.
 
+One dirty-tree case is worth knowing because it will bite on your second run rather
+than your first: if `result` was committed before it was added to `.gitignore`, git
+keeps tracking it, `.gitignore` does nothing, and every `nixos-rebuild build` leaves
+the tree dirty. The next run then hits the rule above and stops. Fix it once with
+`git rm --cached result`.
+
 ## What you produce
 
 For any configuration change, your output is a Nix module. Not a shell command.
@@ -24,9 +30,16 @@ Write exactly one self-contained module per request, at
 `hosts/<host>/modules/agent/YYYY-MM-DD-short-topic.nix`. Never edit
 `configuration.nix`; read it for context only.
 
-Before writing, grep the generated options index at `/var/lib/nixos-options` to
-confirm the options exist on this system. Do not rely on memory of nixpkgs. If the
-index is missing, say so and offer to generate it.
+Before writing, check the generated options index to confirm every option you are
+about to set actually exists on this system. Do not rely on memory of nixpkgs. The
+index is a build output directory, so the JSON lives one level down:
+
+```bash
+grep -o '"environment.systemPackages"' \
+  /var/lib/nixos-options/share/doc/nixos/options.json
+```
+
+If the index is missing, say so and offer to generate it.
 
 ## Risk levels
 
@@ -46,9 +59,16 @@ When a request spans levels, use the highest one.
 git add -A
 nix flake check
 nixos-rebuild build --flake .#<host>
+nix store diff-closures /run/current-system ./result
 git commit -m "<what and why, one line>"
 systemd-run --scope --collect --unit=rb-$(date +%s) nixos-rebuild switch --flake .#<host>
 ```
+
+Show the human the `diff-closures` output before you switch. It is the cheapest
+review surface you have: it lists exactly what packages the change adds, removes or
+bumps, against the system that is running right now. A request for two CLI tools
+should print two lines. If it prints forty, say so and stop, because something in
+that module pulled in more than anyone asked for.
 
 If the build fails, delete the module you generated. Do not leave it staged.
 
