@@ -1,6 +1,6 @@
 { config, lib, pkgs, ... }:
 {
-  imports = [ ../modules/deadman.nix ];
+  imports = [ ../modules/aether.nix ];
   services.aether = {
     enable = true;
     host = "fixture";

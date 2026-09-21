@@ -14,6 +14,8 @@
 
 let
   cfg = config.services.aether;
+  withApply = config._module.args.aetherApplyIntegration or false;
+  applyRuntime = lib.optional withApply pkgs.python3;
 
   validateTarget = ''
     valid_target() {
@@ -27,24 +29,33 @@ let
   # evaluation belongs in the path that runs after we have lost SSH.
   rollbackScript = pkgs.writeShellApplication {
     name = "aether-rollback";
-    runtimeInputs = [ pkgs.nix pkgs.coreutils pkgs.python3 pkgs.systemd ];
+    runtimeInputs = [ pkgs.nix pkgs.coreutils ] ++ applyRuntime ++ [ pkgs.systemd ];
     text = ''
       profile=/nix/var/nix/profiles/system
       pin=/run/aether/rollback-target
       ${validateTarget}
 
       recovery_status=0
-      python3 -I ${./apply.py} recovery-begin "${pkgs.systemd}/bin/systemctl" || {
-        recovery_status=$?
-        echo "aether: ERROR: apply cancellation/state invalidation failed; attempting recovery anyway." >&2
-      }
+      ${lib.optionalString withApply ''
+        finish_recovery() {
+          python3 -I ${./apply.py} recovery-finish "$@" || {
+            echo "aether: ERROR: could not record recovery completion; inspect apply state before another change." >&2
+            return 1
+          }
+        }
+
+        python3 -I ${./apply.py} recovery-begin "${pkgs.systemd}/bin/systemctl" || {
+          recovery_status=$?
+          echo "aether: ERROR: apply cancellation/state invalidation failed; attempting recovery anyway." >&2
+        }
+      ''}
 
       target=
       if [[ ! -f "$pin" ]] || ! target=$(cat "$pin") || ! valid_target "$target"; then
         echo "aether: WARNING: missing or invalid rollback target in $pin; falling back to boot-default profile $profile." >&2
         if ! target=$(readlink -f "$profile") || ! valid_target "$target"; then
           echo "aether: ERROR: boot-default profile is not an activatable system; cannot recover." >&2
-          python3 -I ${./apply.py} recovery-finish "" 1
+          ${lib.optionalString withApply ''finish_recovery "" 1''}
           exit 1
         fi
       fi
@@ -58,7 +69,7 @@ let
 
       if ! "$target"/bin/switch-to-configuration switch; then
         echo "aether: ERROR: recovery activation of $target failed; inspect the journal and use the rescue console." >&2
-        python3 -I ${./apply.py} recovery-finish "$target" 1
+        ${lib.optionalString withApply ''finish_recovery "$target" 1''}
         exit 1
       fi
 
@@ -68,7 +79,7 @@ let
       if (( profile_status != 0 )); then
         recovery_status=$profile_status
       fi
-      python3 -I ${./apply.py} recovery-finish "$target" "$recovery_status"
+      ${lib.optionalString withApply ''finish_recovery "$target" "$recovery_status"''}
       exit "$recovery_status"
     '';
   };
@@ -118,14 +129,17 @@ let
       echo "aether: pinned $target"
       echo "aether: armed. The system rolls back in $timeout unless disarmed."
       echo "aether: open a SECOND ssh session and confirm you can still log in,"
-      echo "aether: keeping this one open. For an apply transaction, a DIFFERENT human runs aether-confirm."
-      echo "aether: aether-disarm alone is a manual timer operation, not candidate confirmation."
+      echo "aether: keeping this one open."
+      ${lib.optionalString withApply ''
+        echo "aether: for an apply transaction, a DIFFERENT human runs aether-confirm."
+        echo "aether: aether-disarm alone is a manual timer operation, not candidate confirmation."
+      ''}
     '';
   };
 
   disarm = pkgs.writeShellApplication {
     name = "aether-disarm";
-    runtimeInputs = [ pkgs.systemd pkgs.coreutils pkgs.util-linux pkgs.python3 ];
+    runtimeInputs = [ pkgs.systemd pkgs.coreutils pkgs.util-linux ] ++ applyRuntime;
     text = ''
       install -d -m 0700 /run/aether
       exec 9>/run/aether/lock
@@ -140,7 +154,7 @@ let
       fi
 
       timeout 10s systemctl stop ${cfg.unitName}.timer
-      python3 -I ${./apply.py} revoke
+      ${lib.optionalString withApply ''python3 -I ${./apply.py} revoke''}
       if systemctl is-active --quiet ${cfg.unitName}.service || [[ -e /run/aether/recovering.json ]]; then
         echo "aether: ERROR: recovery is already running; no confirmation is permitted." >&2
         exit 1
@@ -152,7 +166,7 @@ let
 
   status = pkgs.writeShellApplication {
     name = "aether-status";
-    runtimeInputs = [ pkgs.systemd pkgs.coreutils pkgs.python3 ];
+    runtimeInputs = [ pkgs.systemd pkgs.coreutils ] ++ applyRuntime;
     text = ''
       if (( $# != 0 )); then
         echo "aether: ERROR: aether-status takes no arguments." >&2
@@ -171,19 +185,18 @@ let
       else
         echo "not armed"
       fi
-      python3 -I ${./apply.py} status
+      ${lib.optionalString withApply ''python3 -I ${./apply.py} status''}
     '';
   };
 in
 {
-  imports = [ ./index.nix ./apply.nix ];
-
   options.services.aether = {
     enable = lib.mkEnableOption ''
       the Aether deadman rollback helpers.
 
-      This installs aether-apply, aether-confirm, aether-arm, aether-disarm,
-      aether-status and aether-index.
+      This installs aether-arm, aether-disarm and aether-status.
+      The full nixosModules.aether bundle also installs aether-apply,
+      aether-confirm and aether-index.
       It does not install an agent, does not run anything in the background,
       and does not touch your configuration on its own
     '';
