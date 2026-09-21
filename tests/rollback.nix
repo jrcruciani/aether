@@ -30,8 +30,16 @@
     machine.succeed(f"nix-env --profile {profile} --set {broken}")
     machine.succeed(f"nix-env --profile {profile} --set {base}")
 
-    with subtest("disarm removes the pin"):
-        machine.succeed("aether-arm 5min")
+    with subtest("competing arm preserves the pin; disarm removes it"):
+        machine.succeed(
+            "(aether-arm 5min; echo $? > /tmp/arm-a.status) & "
+            "(aether-arm 5min; echo $? > /tmp/arm-b.status) & wait"
+        )
+        results = sorted(
+            machine.succeed(f"cat /tmp/arm-{name}.status").strip()
+            for name in ("a", "b")
+        )
+        assert results == ["0", "1"], results
         status = machine.succeed("aether-status")
         assert base in status and "ARMED" in status and "LEFT" in status, status
         machine.succeed(f"test \"$(cat {pin})\" = {base}")

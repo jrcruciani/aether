@@ -63,11 +63,16 @@ let
 
   arm = pkgs.writeShellApplication {
     name = "aether-arm";
-    runtimeInputs = [ pkgs.systemd pkgs.coreutils ];
+    runtimeInputs = [ pkgs.systemd pkgs.coreutils pkgs.util-linux ];
     text = ''
       timeout="''${1:-${cfg.rollbackTimeout}}"
       pin=/run/aether/rollback-target
       ${validateTarget}
+
+      # Keep a competing arm or disarm from replacing a live timer's pin.
+      install -d -m 0700 /run/aether
+      exec 9>/run/aether/lock
+      flock -x 9
 
       if systemctl is-active --quiet ${cfg.unitName}.timer; then
         echo "aether: ${cfg.unitName}.timer is already armed." >&2
@@ -80,7 +85,6 @@ let
         exit 1
       fi
 
-      install -d -m 0700 /run/aether
       pending_pin=$(mktemp /run/aether/rollback-target.XXXXXX)
       trap 'rm -f "$pending_pin"' EXIT
       printf '%s\n' "$target" > "$pending_pin"
@@ -105,8 +109,12 @@ let
 
   disarm = pkgs.writeShellApplication {
     name = "aether-disarm";
-    runtimeInputs = [ pkgs.systemd pkgs.coreutils ];
+    runtimeInputs = [ pkgs.systemd pkgs.coreutils pkgs.util-linux ];
     text = ''
+      install -d -m 0700 /run/aether
+      exec 9>/run/aether/lock
+      flock -x 9
+
       if ! systemctl is-active --quiet ${cfg.unitName}.timer; then
         echo "aether: nothing armed." >&2
         exit 1
