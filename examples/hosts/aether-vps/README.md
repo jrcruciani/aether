@@ -51,3 +51,27 @@ need at least the first two of these before it will even start.
 independent of the keys the agent manages day to day, with `sudo` requiring
 no password. Its own comment block says not to touch it without explicit
 triple confirmation — worth stealing verbatim into your own configs.
+
+## Adding the current options helper
+
+The files above are the original install, not a claim that the live host has been
+upgraded. To use the current helpers, add `aether.url = "github:jrcruciani/aether";`
+to the flake inputs, pass `aether` to `outputs`, and import
+`aether.nixosModules.aether` in the host's `modules` list. Then configure:
+
+```nix
+services.aether = {
+  enable = true;
+  flake = "/etc/nixos";
+  host = "vps";
+};
+```
+
+The key is `vps`, even though `networking.hostName` is `nixos-experimento`.
+Create and commit the host's `flake.lock`, install the configuration through the
+normal reviewed flow, then run `aether-index` as root. It builds the options from
+that lock into `/var/lib/nixos-options/share/doc/nixos/options.json`. Run it again
+after changing the lock. Keep `documentation.enable` and
+`documentation.nixos.enable` enabled: disabling either removes the manual build
+attribute on the tested 25.05 and 25.11 pins. The helper reports failure and leaves
+the previous index alone; it does not fall back to a channel.

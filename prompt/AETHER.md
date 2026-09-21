@@ -39,7 +39,36 @@ grep -o '"environment.systemPackages"' \
   /var/lib/nixos-options/share/doc/nixos/options.json
 ```
 
-If the index is missing, say so and offer to generate it.
+If the index is missing, say so and offer one command, `aether-index`, run as root.
+It comes from `services.aether.enable`. Setup requires `services.aether.flake`
+(an absolute local directory, default `/etc/nixos`) and `services.aether.host`
+(the explicit `nixosConfigurations` key, not the OS hostname), plus a reviewed
+`flake.lock` in that directory. The helper never updates the lock. If setup is
+missing or the build fails, show the error and stop; do not guess a host or use
+an unrelated nixpkgs.
+
+The underlying command is
+`nix build /etc/nixos#nixosConfigurations.<host>.config.system.build.manual.optionsJSON -o /var/lib/nixos-options`;
+the helper also uses `--no-update-lock-file`. Regenerate with `aether-index` after
+lock or host-module changes. A failed build leaves the old symlink untouched, not
+validated for the new configuration.
+
+Name presence is not a type check. Query the host's actual type when needed:
+
+```bash
+nix eval --no-update-lock-file \
+  /etc/nixos#nixosConfigurations.<host>.options.<path>.type.description
+```
+
+The default JSON covers nixpkgs' base modules. If an imported module's option is
+absent, query `.options` directly rather than declaring it invalid; including
+those modules in the JSON requires `documentation.nixos.includeAllModules = true`.
+On the tested 25.05 and 25.11 pins, disabling `documentation.enable` or
+`documentation.nixos.enable` removes the manual build attribute. Say so and stop;
+do not silently change the host's documentation policy.
+`documentation.doc.enable = false` only skips installing HTML docs and preserves
+the attribute. The index describes the locked host configuration, not necessarily
+the currently running generation.
 
 ## Risk levels
 
