@@ -71,3 +71,30 @@ passed all seven subtests with
 NixOS 26.05 input, including the full 70-second disarm wait. The runtime helpers
 did not change. This is still a direct-boot KVM guest, not a bootloader test or a
 timer experiment on a live host.
+
+## 05: apply through a single guarded entry point
+
+I added the single-entry-point ADR, `aether-apply build|test|switch` and a separate
+human `aether-confirm`. Apply uses the configured flake/host, scans a deliberately
+bounded static syntax, stages and builds an exact root-owned snapshot, prints the
+closure diff and activates only that built store path in a detached scope. Tool
+floors cannot be lowered by `--risk`; R4 and unsupported proposals show a bounded
+source diff without mutation, and kernel/initrd/hardware activation is a manual
+handoff. R3 test auto-arms, confirmation requires a different principal and
+successful disarm, and commits follow successful final activation rather than
+preceding a risky test. Approval is candidate-bound and single-use; recovery
+cancels a blocked worker without waiting on its apply lock, and a durable pending
+gate requires a safe running/boot-default pair plus a fresh repository build equal
+to the running system. The prompt, playbook, README and hardening/rescue
+instructions now agree on that account and ownership contract. The
+[Linux evidence run](https://github.com/jrcruciani/aether/actions/runs/35635585546)
+at code SHA `b30cb4406dbe293867c2a0bf0db209959c333cce` passed 17
+policy/identity/state tests and all 13 restricted-account VM scenarios, including
+real ripgrep 15.1.0/fd 10.4.2 installation, separate-human SSH confirmation, sudo
+denials, unchanged R4 state, stale/foreign approval, arm/disarm failure, blocked
+and failed activation, an actual failed profile update that still attempted
+recovery activation, and a real reboot followed by mismatch refusal and successful
+cleanup/build equality. All eight existing deadman subtests and both real
+25.05/25.11 options-index builds also passed. These are disposable direct-boot
+guests with exact preloaded fixture closures and a persistent writable Nix store,
+not bootloader or hostile-code-sandbox evidence; no timer was tested on a live host.
