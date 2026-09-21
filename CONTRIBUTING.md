@@ -56,3 +56,10 @@ The rollback VM check runs in Linux GitHub Actions. With x86_64 Linux and KVM,
 test-only nixpkgs input, not the package set of a host importing the module. If
 you add Nix that is meant to evaluate, say what you tested and on which NixOS
 release. A disposable VM run is not a live-host field note.
+
+The options-index job separately runs `bash tests/index-pins.sh` on a disposable
+Linux runner with Nix, git, jq and sudo. It copies the example host, builds real
+options at two fixed host pins, and records their counts in the job summary.
+It needs network access and writes `/var/lib/nixos-options`; it refuses an
+existing index and is not a test to run on your managed host. Keep this outside
+the offline VM check, and do not replace the host's pin with `nixpkgs-test`.

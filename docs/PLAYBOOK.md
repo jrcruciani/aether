@@ -227,10 +227,30 @@ Hallucinated NixOS options are the most common failure by a wide margin. The mod
 half-remembers an option name from a nixpkgs version that no longer exists, and you
 get an evaluation error with no obvious cause.
 
-Dump the actual option set from the actual system and consult it before writing:
+Build from the host flake, not a channel that happens to be on the machine. After
+importing `aether.nixosModules.aether`, configure the helper once:
+
+```nix
+services.aether = {
+  enable = true;
+  flake = "/etc/nixos"; # the default; an absolute local directory
+  host = "vps";        # nixosConfigurations.vps, NOT networking.hostName
+};
+```
+
+Create, review and commit the host's `flake.lock` before using the index. Once the
+module is installed, run `aether-index` as root. It takes no arguments, requires
+that lock, and refuses to update it. A failed build leaves the old index in place.
+Omitting `host` does not break timer-only installs, but the index command fails
+with a setup message rather than guessing. Host keys may contain letters, digits,
+underscores and hyphens; flake directory paths may contain spaces, but not `#`,
+`?` or line breaks.
+
+The underlying build is this, with `<host>` replaced by the actual configuration
+key (the helper also passes `--no-update-lock-file`):
 
 ```bash
-nix-build -E '(import <nixpkgs/nixos> { configuration = {}; }).config.system.build.manual.optionsJSON' \
+nix build /etc/nixos#nixosConfigurations.<host>.config.system.build.manual.optionsJSON \
   -o /var/lib/nixos-options
 ```
 
@@ -245,8 +265,31 @@ grep -o '"services.openssh.enable"' \
 Worth stating plainly because pointing an agent at the top-level path just gives it
 `IsADirectoryError` and it will improvise from there.
 
-Regenerate after every flake.lock bump. Grepping this file before writing a module
-costs a second and catches errors the syntax gate cannot.
+That grep checks name presence, not the type of the value you plan to assign.
+For an authoritative type description from the same host:
+
+```bash
+nix eval --no-update-lock-file \
+  /etc/nixos#nixosConfigurations.<host>.options.services.openssh.enable.type.description
+```
+
+The JSON normally documents nixpkgs' base modules. Options declared by third-party
+or local modules need `documentation.nixos.includeAllModules = true`, or a direct
+query of the host's `.options` as above. Absence from the default JSON alone does
+not prove an imported option is invalid. The normal configuration build still
+has to check the values.
+
+On the tested 25.05 and 25.11 pins, `documentation.nixos.enable = false` removes
+`config.system.build.manual` altogether; so does `documentation.enable = false`.
+There is no standalone JSON attribute left to build. Keep both enabled for this
+command. If the aim is just to skip installing HTML docs, use
+`documentation.doc.enable = false` instead; the JSON build attribute remains.
+The helper does not secretly re-enable documentation or fall back to another
+nixpkgs. A failed regeneration means stop, not trust an old index.
+
+Run `aether-index` after every `flake.lock` bump or change to the host's modules.
+The index describes the locked configuration, which may not yet be the running
+generation. Consult it before writing, then use the build gate as usual.
 
 ## Rule eight: confirmation belongs to the human, not the model
 

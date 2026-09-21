@@ -28,6 +28,13 @@
     pin = "/run/aether/rollback-target"
     timer = "deadman-rollback.timer"
 
+    with subtest("timer-only installation does not guess an index host"):
+        error = machine.fail(
+            "env -i PATH=/missing /run/current-system/sw/bin/aether-index 2>&1"
+        )
+        assert "set services.aether.host to the nixosConfigurations key" in error, error
+        machine.fail("test -e /var/lib/nixos-options")
+
     def wait_for_collection():
         machine.wait_until_succeeds(
             "units=$(systemctl list-units --all --plain --no-legend "

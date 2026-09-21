@@ -33,3 +33,44 @@ catches this one immediately: it prints nothing at all.
 `2026-09-03-postgres-localhost-only.nix.example` shows a slightly larger change and
 the reasoning about which risk level it lands on. Drop the `.example` suffix to use
 it.
+
+## Installing the helpers and the options index
+
+`flake.nix` imports `aether.nixosModules.aether`; the host sets
+`services.aether.enable = true`, `services.aether.flake = "/etc/nixos"` and
+`services.aether.host = "vps"`. The last value is the `nixosConfigurations` key,
+not the OS hostname. The separate Hetzner example deliberately has different
+names; its [setup note](hosts/aether-vps/README.md#adding-the-current-options-helper)
+uses `vps`, not `nixos-experimento`.
+
+There is no lock file in this skeleton. In your copied host repo, run
+`nix flake lock`, review and commit `flake.lock`, then install the configuration
+through the normal reviewed flow. As root, run:
+
+```bash
+aether-index
+```
+
+It builds the equivalent of
+`nix build /etc/nixos#nixosConfigurations.vps.config.system.build.manual.optionsJSON -o /var/lib/nixos-options`,
+with `--no-update-lock-file`. The JSON is at
+`/var/lib/nixos-options/share/doc/nixos/options.json`, not at the symlink itself.
+Regenerate after lock or module changes. The helper accepts an absolute local
+flake directory (including spaces) and a host key made of letters, digits,
+underscores or hyphens. It refuses a missing lock and never guesses the hostname.
+Existing timer-only installs can leave `host` unset; only `aether-index` fails.
+
+On the tested NixOS 25.05 and 25.11 pins, both `documentation.enable` and
+`documentation.nixos.enable` must be true for this build attribute to exist.
+`documentation.doc.enable = false` skips installing the HTML manual without
+removing the attribute. The default index covers nixpkgs' base modules; for
+options declared by imported modules, enable
+`documentation.nixos.includeAllModules` or query the host's `.options` directly
+as shown in [rule seven](../docs/PLAYBOOK.md#rule-seven-ground-the-model-in-real-options).
+
+`tests/index-pins.sh` copies this skeleton into a disposable directory in Linux
+CI, creates its lock at a fixed 25.05 revision, builds the index, then changes
+only that lock to a fixed 25.11 revision and builds again. It checks the real JSON
+layout, different option counts, the configured helper, and disabled-documentation
+failure without booting the placeholder hardware configuration. This networked
+evidence job is separate from the locked, offline deadman VM check.

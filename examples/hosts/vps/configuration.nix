@@ -14,6 +14,12 @@
 
   networking.hostName = "vps";
 
+  services.aether = {
+    enable = true;
+    flake = "/etc/nixos";
+    host = "vps"; # nixosConfigurations.vps, not a hostname lookup
+  };
+
   # Keep at least a few generations in the boot menu. This is your rollback path,
   # so do not let garbage collection eat all of them.
   boot.loader.grub.configurationLimit = 10;

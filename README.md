@@ -51,7 +51,8 @@ It has not been through a hundred hostile configurations. If you point it at
 something you care about without reading it first, that is on you.
 
 What exists today: the safety protocol, the system prompt, the rescue runbook,
-worked examples, a NixOS module packaging the rollback timer, and a Linux VM
+worked examples, a NixOS module packaging the rollback timer and pinned options
+index, and a Linux VM
 regression suite for recovery, disarming and competing arms. What does not exist:
 an agent CLI, a broad system test suite, multi-host support.
 
@@ -145,12 +146,27 @@ NixOS module:
   services.aether = {
     enable = true;
     rollbackTimeout = "10min";
+    flake = "/etc/nixos"; # default; contains your reviewed flake.lock
+    host = "vps";        # nixosConfigurations key, not the OS hostname
   };
 }
 ```
 
-That gives you `aether-arm`, `aether-disarm` and `aether-status`. Nothing runs in
-the background and nothing touches your configuration on its own.
+That gives you `aether-arm`, `aether-disarm`, `aether-status` and `aether-index`.
+Nothing runs in the background and nothing touches your configuration on its own.
+Timer-only installs can omit `host`; the index command then reports a setup error.
+
+Run `aether-index` as root after setup and after each host `flake.lock` or module
+change. It builds
+`/etc/nixos#nixosConfigurations.vps.config.system.build.manual.optionsJSON`
+without updating the lock, and replaces `/var/lib/nixos-options` only after a
+successful build. The JSON stays at
+`/var/lib/nixos-options/share/doc/nixos/options.json`. Keep
+`documentation.enable` and `documentation.nixos.enable` enabled: disabling either
+removes this attribute on the tested 25.05 and 25.11 pins. Disabling only
+`documentation.doc.enable` still permits the JSON build.
+[Rule seven](docs/PLAYBOOK.md#rule-seven-ground-the-model-in-real-options) covers
+name versus type checks, imported-module options and the direct build command.
 
 `aether-arm` saves the running system's store path in
 `/run/aether/rollback-target` before starting the timer. Recovery sets the system
@@ -182,8 +198,16 @@ subtests outwait a disarmed timer, reject a second arm, and race two arms withou
 losing the pin. Journal checks use a fresh cursor for each recovery and disarm
 scenario, and finished transient units must disappear, not just become inactive.
 This is a direct-boot VM check, not a bootloader test or permission to try the timer
-on a live host. The locked `nixpkgs-test` input is only for this check. Importing
-the module still uses your own `pkgs`.
+on a live host. It also checks that a timer-only install rejects `aether-index`
+without guessing a host. The locked `nixpkgs-test` input is only for this check.
+Importing the module still uses your own `pkgs`.
+
+A separate Linux CI job runs `bash tests/index-pins.sh`: it copies the example
+host, locks it to a fixed 25.05 revision, generates real options, bumps the fixture
+lock to a fixed 25.11 revision, and requires a different option count. It runs the
+packaged helper with an empty caller PATH and checks that failed builds preserve
+the old index. Those networked builds do not run inside the deadman VM or change
+the package set used by a host.
 
 ## Getting started
 
@@ -195,6 +219,8 @@ own loop will all work.
 1. Read [docs/PLAYBOOK.md](docs/PLAYBOOK.md). It is the actual product. About fifteen
    minutes.
 2. Set up your repo like [examples/](examples/) and get `nixos-rebuild build` passing.
+   Configure the helper's host key, review and commit your `flake.lock`, then run
+   `aether-index` as root to generate the options index.
 3. Feed [prompt/AETHER.md](prompt/AETHER.md) to your agent as a system prompt or
    project instruction file.
 4. Do the rescue drill in [docs/RESCUE.md](docs/RESCUE.md) *before* your first real

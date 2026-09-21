@@ -147,13 +147,15 @@ let
   };
 in
 {
+  imports = [ ./index.nix ];
+
   options.services.aether = {
     enable = lib.mkEnableOption ''
       the Aether deadman rollback helpers.
 
-      This installs aether-arm, aether-disarm and aether-status. It does not
-      install an agent, does not run anything in the background, and does not
-      touch your configuration on its own
+      This installs aether-arm, aether-disarm, aether-status and aether-index.
+      It does not install an agent, does not run anything in the background,
+      and does not touch your configuration on its own
     '';
 
     rollbackTimeout = lib.mkOption {
