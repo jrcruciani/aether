@@ -289,8 +289,8 @@ in
         propose(firewall_file, ${builtins.toJSON firewall})
         machine.succeed(
             "touch /run/block-candidate && "
-            "systemd-run --unit=fixture-agent-apply /bin/sh -c "
-            + shlex.quote(f"su -s /bin/sh agent -c '/run/wrappers/bin/sudo -n {apply} test'")
+            "systemd-run --unit=fixture-agent-apply --uid=agent "
+            f"/run/wrappers/bin/sudo -n {apply} test"
         )
         machine.wait_until_succeeds(f"systemctl is-active --quiet {timer}", timeout=60)
         machine.wait_until_succeeds(

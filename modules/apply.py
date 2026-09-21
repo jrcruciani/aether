@@ -303,6 +303,15 @@ def atomic_json(path, value):
         stream.flush()
         os.fsync(stream.fileno())
     os.replace(temporary, path)
+    sync_directory(path.parent)
+
+
+def sync_directory(path):
+    descriptor = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
 
 
 def boot_id():
@@ -378,7 +387,12 @@ def git_text(config, repo, *args):
 
 def private_directories():
     for directory in (RUN, STATE, STATE / "candidates", STATE / "home"):
-        directory.mkdir(mode=0o700, exist_ok=True)
+        try:
+            directory.mkdir(mode=0o700)
+        except FileExistsError:
+            pass
+        else:
+            sync_directory(directory.parent)
         info = directory.lstat()
         if not stat.S_ISDIR(info.st_mode) or info.st_uid != 0 or info.st_mode & 0o077:
             raise Error(f"{directory} must be a real root-owned 0700 directory")
@@ -612,8 +626,8 @@ def refusal_diff(view, max_lines=200, max_chars=16384):
             for line in difflib.unified_diff(
                     old.splitlines(), new.splitlines(),
                     fromfile="HEAD:" + name, tofile=label + ":" + name, lineterm=""):
-                safe = "".join(char if char == "\t" or (ord(char) >= 32 and ord(char) != 127)
-                               else f"\\x{ord(char):02x}" for char in line)
+                safe = "".join(char if char == "\t" or char.isprintable()
+                               else char.encode("unicode_escape").decode("ascii") for char in line)
                 if len(output) >= max_lines or size + len(safe) + 1 > max_chars:
                     output.append("[diff truncated; review the complete source before any manual action]")
                     return "\n".join(output)
@@ -734,7 +748,8 @@ def invalidate_pending(candidate, reason):
 
 def remove_candidate_files(candidate):
     folder = Path(candidate["folder"])
-    if folder.parent != STATE / "candidates" or not re.fullmatch(r"[0-9a-f]{32}", folder.name):
+    if (folder.parent != STATE / "candidates" or folder.name != candidate["id"] or
+            not re.fullmatch(r"[0-9a-f]{32}", folder.name)):
         raise Error("invalid transaction cleanup path")
     if folder.exists():
         shutil.rmtree(folder)
@@ -746,6 +761,7 @@ def finish(candidate):
     (RUN / "rollback-target").unlink(missing_ok=True)
     (RUN / "candidate.json").unlink(missing_ok=True)
     (STATE / "pending.json").unlink(missing_ok=True)
+    sync_directory(STATE)
 
 
 def recovery_build(config, repo, proposals, view, risk, caller, pending):

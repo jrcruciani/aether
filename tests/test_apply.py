@@ -2,6 +2,7 @@ import importlib.util
 import os
 from pathlib import Path
 import sys
+import tempfile
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
@@ -173,6 +174,18 @@ class Policy(unittest.TestCase):
         view["contents"]["new.nix"] = b"# \x1b[2J\n{ users.users.new.isNormalUser = true; }\n"
         self.assertNotIn("\x1b", apply.refusal_diff(view))
         self.assertIn("\\x1b", apply.refusal_diff(view))
+        view["contents"]["new.nix"] = "# \u202e\n{ users.users.new.isNormalUser = true; }\n".encode()
+        self.assertNotIn("\u202e", apply.refusal_diff(view))
+        self.assertIn("\\u202e", apply.refusal_diff(view))
+
+    def test_atomic_state_replacement_is_private_and_leaves_no_temporary_files(self):
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / "pending.json"
+            apply.atomic_json(target, {"phase": "testing"})
+            apply.atomic_json(target, {"phase": "confirmed"})
+            self.assertEqual(apply.read_json(target), {"phase": "confirmed"})
+            self.assertEqual(target.stat().st_mode & 0o777, 0o600)
+            self.assertEqual(list(Path(directory).iterdir()), [target])
 
     def test_unsafe_boot_profile_blocks_recovery_before_building(self):
         pending = {"id": "transaction", "baseline": "/nix/store/good"}
