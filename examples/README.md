@@ -14,7 +14,7 @@ hosts/vps/
     2026-09-03-ripgrep-and-fd.nix
 ```
 
-The shape that matters is `modules/agent/`. One file per request, dated, imported
+The shape that matters is `hosts/<host>/modules/agent/`. One file per request, dated, imported
 automatically in sorted order by the human-owned `default.nix`. Do not edit the
 loader when adding a proposal. A root-owned sticky directory protects it from
 unlink/replacement while allowing the agent to create its own `.nix` files.
@@ -26,7 +26,7 @@ The host directory is called `vps` here, but the name is yours. Whatever you cal
 the flake and the agent have to agree, because `nixos-rebuild --flake .#vps` takes the
 name from `nixosConfigurations`, not from the directory.
 
-More important: `modules/agent` has to be in the flake's `modules` list, as it is in
+More important: `hosts/<host>/modules/agent/` has to be in the flake's `modules` list, as it is in
 `flake.nix` here. Miss it and the agent writes a module, `nix flake check` passes,
 `nixos-rebuild` reports success, and absolutely nothing happens, because the file was
 never part of the configuration. There is no error to read. `nix store diff-closures`

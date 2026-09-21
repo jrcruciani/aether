@@ -4,10 +4,10 @@ An operating system you configure by talking to it.
 AI lives alongside the OS itself, transforming your intentions into declarative operations that reconfigure the OS on demand.
 
 You just say "I need a Postgres database on this machine, only reachable from my
-laptop" and the agent writes a Nix module, compiles it, show you the diff, applies it...
+laptop" and the agent writes a Nix module, compiles it, shows you the diff, applies it...
 or, if the change locks you out the machine, rolls itself back before you panic.
 
-Aether is playbook, a set of rules, prompts and
+Aether is a playbook, a set of rules, prompts and
 guardrails for a separate, restricted LLM-agent account on a NixOS box.
 It is a cooperative workflow guardrail, not a sandbox for hostile Nix or a way to
 constrain an agent that already has root.
@@ -76,12 +76,15 @@ Besides, don't you want a self-configuring OS? Such a cool idea!
 
 ## How it works
 
-Every request you make goes through the same pipeline.
+Before each request, run `sudo aether-status`. If it reports `ARMED`, stop and
+tell the human: a leftover timer will revert whatever is applied next. A failed
+status check or unresolved transaction also means stop, not permission to disarm.
+Every request you make then goes through the same pipeline.
 
 ```
 you ask for something in plain language
   -> agent classifies the risk (R0 to R4)
-  -> agent writes ONE isolated module into modules/agent/
+  -> agent writes ONE isolated module into hosts/<host>/modules/agent/
   -> aether-apply build: freeze exact source, stage, check, build and show closure diff
   -> nothing has touched the running system yet
   -> R1/R2: review the diff, then aether-apply switch; helper commits after success
@@ -190,7 +193,11 @@ removes this attribute on the tested 25.05 and 25.11 pins. Disabling only
 [Rule seven](docs/PLAYBOOK.md#rule-seven-ground-the-model-in-real-options) covers
 name versus type checks, imported-module options and the direct build command.
 
-`aether-arm` saves the running system's store path in
+`aether-arm` requires root and validates its timeout with
+`systemd-analyze timespan` before creating state or units. Invalid input leaves
+any existing pin and timer untouched; systemd's time-span syntax is supported,
+including compound spans such as `1min 30s`.
+It saves the running system's store path in
 `/run/aether/rollback-target` before starting the timer. Recovery sets the system
 profile to that exact path, then activates it. It does not go back one generation:
 `nixos-rebuild test` leaves the profile alone, so that would skip the system I was
@@ -199,7 +206,12 @@ journal and uses the current boot-default profile instead. It still attempts
 activation if updating the profile fails, but reports the failure rather than
 pretending the boot default is safe. `aether-status` shows the pin and the timer's
 time remaining; `aether-disarm` remains a human manual timer helper, not agent
-confirmation. During apply, the candidate and baseline also have GC roots.
+confirmation. Disarm refuses with `rollback in progress, do not interrupt` before
+stopping the timer or revoking approval when rollback is active, transitioning,
+queued, or marked as recovering. It never stops the rollback service. A second
+check after stopping the timer catches recovery observed then; these checks are
+not an atomic barrier against systemd starting recovery concurrently. Failed
+disarm never authorizes confirmation. During apply, the candidate and baseline also have GC roots.
 Rollback invalidates confirmation and cancels a blocked activation with bounded
 waits, without waiting indefinitely for an apply lock.
 
@@ -220,7 +232,10 @@ specialisation that stops sshd, then waits for real timer recovery of the runnin
 path, system profile and SSH. It checks that the pin wins even when the boot
 default has moved, and that missing or invalid pins warn and fall back. Separate
 subtests outwait a disarmed timer, reject a second arm, and race two arms without
-losing the pin. Journal checks use a fresh cursor for each recovery and disarm
+losing the pin. Edge checks reject non-root arming before writes and invalid
+spans without changing state, exercise valid spans with an empty caller PATH,
+and hold real recovery activation open to verify disarm refuses without changing
+the timer, pin or approval state. Journal checks use a fresh cursor for each recovery and disarm
 scenario, and finished transient units must disappear, not just become inactive.
 This is a direct-boot VM check, not a bootloader test or permission to try the timer
 on a live host. It also checks that a timer-only install rejects `aether-index`
@@ -263,7 +278,7 @@ own loop will all work.
 ## What Aether is not
 
 It's not autonomous, yet. It plans and proposes and waits. If you want a server that
-administers itself while you sleep, this will disappoint you on purpose, at least in it's current iteration.
+administers itself while you sleep, this will disappoint you on purpose, at least in its current iteration.
 
 This is not a substitute for reading your config. If you cannot read the module, do not
 approve it. The syntax gate catches malformed Nix, not bad ideas.

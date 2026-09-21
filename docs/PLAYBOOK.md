@@ -14,6 +14,10 @@ The intended agent is a separate non-wheel account, not root. This is a scoped
 cooperative guardrail, not a hostile-Nix sandbox; packages and trusted modules
 can still contain privileged code.
 
+Before each request, run `sudo aether-status`. If it reports `ARMED`, stop and
+tell the human: a leftover timer will revert whatever is applied next. Stop on a
+failed status check or unresolved transaction too; do not disarm to bypass it.
+
 ## Rule one: git tracks it or Nix cannot see it
 
 Nix flakes ignore untracked files. The helper freezes the proposal in a root-owned
@@ -133,6 +137,14 @@ transaction invalidates the token; there is no model-accessible confirmation fla
 
 `aether-arm` and `aether-disarm` remain human timer helpers, not extra agent sudo
 grants. The timer pins `/run/current-system` in `/run/aether/rollback-target`.
+Arm requires root and validates the timeout with `systemd-analyze timespan`
+before creating state or units, so invalid input cannot disturb an existing pin
+or timer. It accepts systemd time spans, including `1min 30s`.
+Disarm checks for active, transitioning or queued rollback and a recovery marker
+before stopping the timer or revoking approval. It refuses with
+`rollback in progress, do not interrupt` and never stops the rollback service.
+It checks again after stopping the timer, but these observations are not an
+atomic barrier against concurrent recovery. Failed disarm means no confirmation.
 Recovery sets the system profile to that path and activates it directly, never
 evaluating a flake or using `nixos-rebuild`. A test left the profile unchanged, so
 going back one generation would recover the wrong system. A missing/invalid pin

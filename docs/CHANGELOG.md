@@ -98,3 +98,15 @@ cleanup/build equality. All eight existing deadman subtests and both real
 25.05/25.11 options-index builds also passed. These are disposable direct-boot
 guests with exact preloaded fixture closures and a persistent writable Nix store,
 not bootloader or hostile-code-sandbox evidence; no timer was tested on a live host.
+
+## 08: reject unsafe timer edge cases early
+
+Arm now checks the effective UID and parses the timeout with systemd before
+creating state or units, preserving an existing pin and timer on invalid input.
+Disarm checks rollback activity, transitions, queued jobs and the recovery marker
+before stopping the timer or revoking approval, and retains a post-stop check.
+It refuses with `rollback in progress, do not interrupt` and never stops the
+rollback service; the checks are not an atomic barrier against concurrent
+recovery. The prompt explicitly stops on a pre-existing `ARMED` status, current
+proposal paths agree on `hosts/<host>/modules/agent/`, and module contributions
+now require a passing NixOS VM check or a real field note.
