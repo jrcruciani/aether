@@ -113,3 +113,24 @@ a documentation command/flow walkthrough against the current helper and account
 contract, including supervision, success, rollback cleanup and repo/running
 equality, plus local link checks. No remote deployment, live-host test or VM rerun
 was performed for this documentation-only change.
+
+## 07: use the deadman timer without an agent
+
+I split the exports, not the recovery promise. `nixosModules.deadman` now installs
+only arm, disarm and status, without agent settings, Python apply hooks or policy
+state. `aether` and `default` still compose the timer, index and apply pieces,
+preserving cancellation, token invalidation and bounded recovery independent of
+the apply lock. Existing enable/timeout settings and full-bundle helper ordering
+remain intact. ADR 0003 records the boundary; the README's human-only walkthrough
+gates a scoped firewall test on successful arming, checks a fresh SSH session and
+never treats manual disarm as apply confirmation. The
+[Linux evidence run](https://github.com/jrcruciani/aether/actions/runs/35639932541)
+at code SHA `aa1f5bf299ce5235be670791b0c300a06cd1589d` passed all 11 deadman
+subtests, including standalone closed-PATH commands, configured-timeout recovery
+of the running system/profile/SSH without policy state, and full-bundle recovery
+despite failing state hooks with explicit journal errors. All 17 policy tests,
+13 actual restricted-account apply scenarios and both real host-pinned index
+builds passed too: 22,116 options on 25.05 and 23,290 on 25.11. The apply check kept
+the exact fixture/preload layout, persistent writable store and reboot coverage.
+This is disposable direct-boot VM evidence, not a live-host timer experiment or
+bootloader test. The final change after that run only adds this evidence entry.
