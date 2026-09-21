@@ -12,5 +12,18 @@
     checks.x86_64-linux.deadman =
       nixpkgs-test.legacyPackages.x86_64-linux.testers.runNixOSTest
         (import ./tests/rollback.nix);
+    checks.x86_64-linux.apply =
+      nixpkgs-test.legacyPackages.x86_64-linux.testers.runNixOSTest
+        (import ./tests/apply.nix);
+    checks.x86_64-linux.apply-policy =
+      let pkgs = nixpkgs-test.legacyPackages.x86_64-linux;
+      in pkgs.runCommand "aether-apply-policy" {
+        nativeBuildInputs = [ pkgs.python3 ];
+      } ''
+        export PYTHONDONTWRITEBYTECODE=1
+        cd ${./.}
+        python -m unittest discover -s tests -p test_apply.py -v
+        touch "$out"
+      '';
   };
 }
