@@ -6,7 +6,8 @@
   inputs.nixpkgs-test.url = "github:NixOS/nixpkgs/6d663c0533ff269008fb84e45930151e37c99db9";
 
   outputs = { self, nixpkgs-test }: {
-    nixosModules.aether = import ./modules/deadman.nix;
+    nixosModules.deadman = import ./modules/deadman.nix;
+    nixosModules.aether = import ./modules/aether.nix;
     nixosModules.default = self.nixosModules.aether;
 
     checks.x86_64-linux.deadman =

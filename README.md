@@ -12,6 +12,51 @@ guardrails for a separate, restricted LLM-agent account on a NixOS box.
 It is a cooperative workflow guardrail, not a sandbox for hostile Nix or a way to
 constrain an agent that already has root.
 
+## Just the timer
+
+You do not need an agent to want your firewall mistake undone. Add
+`inputs.aether.url = "github:jrcruciani/aether";` to your flake, then include this
+module in your `nixosSystem` (with `aether` passed through `specialArgs`):
+
+```nix
+{ aether, ... }: {
+  imports = [ aether.nixosModules.deadman ];
+  services.aether.enable = true;
+  services.aether.rollbackTimeout = "10min";
+}
+```
+
+Rebuild once to install it. No `agentUser`, host key, agent account or agent sudo
+policy is needed. You get `aether-arm`, `aether-disarm` and `aether-status`, not the
+apply pipeline. The following is a **human-operated** firewall test, using your
+own administrative access and configuration key:
+
+```bash
+# Test the firewall configuration you have reviewed; replace <host>.
+sudo aether-arm 10min &&
+  sudo systemd-run --scope --collect nixos-rebuild test --flake /etc/nixos#<host>
+```
+
+The `&&` refuses activation if arming fails; the scope keeps activation outside
+the SSH session's cgroup. Keep that SSH session open. Open a fresh second SSH session, check that you can
+still log in and that the intended firewall behavior works, then run
+`sudo aether-disarm` there. If access fails, leave the timer alone: it restores
+the system that was running when you armed it. The rescue console is still your
+independent fallback. A successful `test` is not persistent; the human separately
+switches and commits the reviewed, unchanged configuration if it should survive
+a reboot. The timer does not do either for you.
+
+Already importing `nixosModules.aether` just for its timer? Change that import to
+`nixosModules.deadman` and remove full-only `flake`, `host` and `agentUser` settings.
+The existing `services.aether.enable` and `rollbackTimeout` keep their meaning.
+Full installations need no migration: `aether` and `default` still provide the
+timer plus `aether-apply`, `aether-confirm` and `aether-index`. Do not remove that
+integration from a host with an unresolved apply transaction.
+**Manual disarm never grants apply confirmation.** The guarded agent flow below
+still requires the full bundle and a different human running `aether-confirm`.
+See [the standalone entry point](deadman/README.md) and
+[ADR 0003](docs/adr/0003-deadman-standalone.md) for the boundary.
+
 ## The longer bet
 
 Every few years someone argues we should go back to devices that do one thing well.
@@ -180,8 +225,10 @@ That gives you `aether-apply`, `aether-confirm`, `aether-arm`, `aether-disarm`,
 `aether-status` and `aether-index`.
 Nothing runs in the background and nothing touches your configuration on its own.
 Enabling the module does not create accounts, grant sudo or fix permissions.
-Timer-only installs can omit `host` and `agentUser`; apply/confirm report setup
-errors and the index requires its explicit host.
+Full-bundle installs can still omit `host` and `agentUser` for manual timer use;
+apply/confirm report setup errors and the index requires its explicit host.
+For a timer without those extra commands or policy dependencies, use
+[`nixosModules.deadman`](#just-the-timer).
 
 Run `aether-index` as root after setup and after each host `flake.lock` or module
 change. It builds
@@ -228,8 +275,11 @@ subtests outwait a disarmed timer, reject a second arm, and race two arms withou
 losing the pin. Journal checks use a fresh cursor for each recovery and disarm
 scenario, and finished transient units must disappear, not just become inactive.
 This is a direct-boot VM check, not a bootloader test or permission to try the timer
-on a live host. It also checks that a timer-only install rejects `aether-index`
-without guessing a host. The locked `nixpkgs-test` input is only for repository checks.
+on a live host. A second node imports the standalone export without any agent
+configuration, runs the helpers with an empty caller PATH, and recovers SSH using
+its configured timeout without creating apply policy state. The full node keeps
+the missing-index-host check and must still recover, with loud errors, when
+transaction-state hooks fail. The locked `nixpkgs-test` input is only for repository checks.
 Importing the module still uses your own `pkgs`.
 
 `checks.x86_64-linux.apply` exercises the actual account/sudoers setup, immutable

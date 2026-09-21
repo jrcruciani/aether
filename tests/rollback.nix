@@ -1,9 +1,23 @@
+let
+  exports = (import ../flake.nix).outputs {
+    self = exports;
+    nixpkgs-test = null;
+  };
+in
 {
   name = "aether-deadman";
 
-  nodes.machine = { lib, ... }: {
-    imports = [ ../modules/deadman.nix ];
+  nodes.machine = { config, lib, ... }: {
+    imports = [ exports.nixosModules.aether ];
     services.aether.enable = true;
+    assertions = [{
+      assertion = builtins.filter (lib.hasPrefix "aether-")
+        (map lib.getName config.environment.systemPackages) == [
+          "aether-apply" "aether-confirm" "aether-index"
+          "aether-arm" "aether-disarm" "aether-status"
+        ];
+      message = "The full bundle must preserve the existing helper package order.";
+    }];
     services.openssh.enable = true;
     system.switch.enable = true;
     # The test driver boots the kernel directly, without a bootloader disk.
@@ -19,6 +33,40 @@
     };
   };
 
+  nodes.standalone = { config, lib, options, ... }: {
+    imports = [ exports.nixosModules.deadman ];
+    services.aether = {
+      enable = true;
+      rollbackTimeout = "20s";
+    };
+    services.openssh.enable = true;
+    system.switch.enable = true;
+    boot.loader.grub.enable = false;
+    specialisation.sshd-off.configuration.services.openssh.enable = lib.mkForce false;
+    virtualisation = {
+      cores = 2;
+      memorySize = 1024;
+    };
+    assertions = [
+      {
+        assertion = !(options.services.aether ? agentUser)
+          && !(options.services.aether ? host) && !(options.services.aether ? flake);
+        message = "The standalone timer must not import agent configuration.";
+      }
+      {
+        assertion = builtins.filter (lib.hasPrefix "aether-")
+          (map lib.getName config.environment.systemPackages)
+          == [ "aether-arm" "aether-disarm" "aether-status" ];
+        message = "The standalone timer must install only the three timer helpers.";
+      }
+      {
+        assertion = exports.nixosModules.default == exports.nixosModules.aether;
+        message = "The default module must remain the full aether bundle.";
+      }
+    ];
+    environment.etc."aether-test-rollback".text = config.services.aether.rollbackCommand;
+  };
+
   testScript = ''
     machine.start()
     machine.wait_for_unit("sshd.service")
@@ -28,15 +76,15 @@
     pin = "/run/aether/rollback-target"
     timer = "deadman-rollback.timer"
 
-    with subtest("timer-only installation does not guess an index host"):
+    with subtest("full bundle without agent configuration does not guess an index host"):
         error = machine.fail(
             "env -i PATH=/missing /run/current-system/sw/bin/aether-index 2>&1"
         )
         assert "set services.aether.host to the nixosConfigurations key" in error, error
         machine.fail("test -e /var/lib/nixos-options")
 
-    def wait_for_collection():
-        machine.wait_until_succeeds(
+    def wait_for_collection(node=machine):
+        node.wait_until_succeeds(
             "units=$(systemctl list-units --all --plain --no-legend "
             "'deadman-rollback.*') && test -z \"$units\"",
             timeout=30,
@@ -145,5 +193,87 @@
         machine.succeed("aether-disarm")
         machine.fail(f"test -e {pin}")
         wait_for_collection()
+
+    with subtest("full bundle still recovers loudly when apply state hooks fail"):
+        machine.succeed("printf broken > /run/aether/candidate.json")
+        cursor = journal_cursor()
+        machine.succeed("aether-arm 20s")
+        machine.succeed(f"{broken}/bin/switch-to-configuration test")
+        machine.fail("systemctl is-active --quiet sshd.service")
+        machine.wait_until_succeeds(
+            f"test \"$(readlink -f /run/current-system)\" = {base} && "
+            f"test \"$(readlink -f {profile})\" = {base} && "
+            "systemctl is-active --quiet sshd.service",
+            timeout=180,
+        )
+        wait_for_collection()
+        journal = rollback_journal(cursor)
+        assert "apply cancellation/state invalidation failed; attempting recovery anyway" in journal, journal
+        assert f"aether: rolling back to {base}" in journal, journal
+        assert "could not record recovery completion" in journal, journal
+        machine.fail("aether-status")
+        machine.succeed("test -e /run/aether/recovering.json")
+        machine.succeed("rm /run/aether/candidate.json /run/aether/recovering.json")
+
+    standalone.start()
+    standalone.wait_for_unit("sshd.service")
+    standalone_base = standalone.succeed("readlink -f /run/current-system").strip()
+    standalone_broken = standalone.succeed(
+        f"readlink -f {standalone_base}/specialisation/sshd-off"
+    ).strip()
+
+    def no_policy_state():
+        standalone.fail("test -e /var/lib/aether")
+        standalone.succeed(
+            "test -z \"$(find /run/aether -maxdepth 1 -name '*.json' -print)\""
+        )
+
+    with subtest("standalone export needs no agent commands, Python hooks or policy state"):
+        for helper in ("aether-apply", "aether-confirm", "aether-index"):
+            standalone.fail(f"test -e /run/current-system/sw/bin/{helper}")
+        rollback = standalone.succeed("cat /etc/aether-test-rollback").strip()
+        for script in (
+            "/run/current-system/sw/bin/aether-arm",
+            "/run/current-system/sw/bin/aether-disarm",
+            "/run/current-system/sw/bin/aether-status",
+            rollback,
+        ):
+            standalone.fail(f"grep -E 'python|apply[.]py' {script}")
+        standalone.succeed("env -i PATH=/missing /run/current-system/sw/bin/aether-arm 5min")
+        status = standalone.succeed("env -i PATH=/missing /run/current-system/sw/bin/aether-status")
+        assert "ARMED" in status.splitlines() and standalone_base in status, status
+        standalone.succeed("env -i PATH=/missing /run/current-system/sw/bin/aether-disarm")
+        standalone.fail(f"test -e {pin}")
+        wait_for_collection(standalone)
+        no_policy_state()
+
+    with subtest("standalone configured timeout restores pinned system, profile and SSH"):
+        standalone.succeed(f"nix-env --profile {profile} --set {standalone_broken}")
+        standalone.succeed(f"nix-env --profile {profile} --set {standalone_base}")
+        cursor = standalone.succeed(
+            "journalctl --sync && journalctl -n 0 --show-cursor --no-pager"
+        ).split("-- cursor: ", 1)[1].strip()
+        armed = standalone.succeed("env -i PATH=/missing /run/current-system/sw/bin/aether-arm")
+        assert "rolls back in 20s" in armed, armed
+        assert "fresh session, run: aether-disarm" in armed, armed
+        assert "aether-confirm" not in armed, armed
+        standalone.succeed(f"test \"$(cat {pin})\" = {standalone_base}")
+        standalone.succeed(f"{standalone_broken}/bin/switch-to-configuration test")
+        standalone.fail("systemctl is-active --quiet sshd.service")
+        standalone.wait_until_succeeds(
+            f"test \"$(readlink -f /run/current-system)\" = {standalone_base} && "
+            f"test \"$(readlink -f {profile})\" = {standalone_base} && "
+            "systemctl is-active --quiet sshd.service",
+            timeout=180,
+        )
+        standalone.wait_for_open_port(22)
+        wait_for_collection(standalone)
+        journal = standalone.succeed(
+            "journalctl --sync && journalctl -u deadman-rollback.service "
+            f"--after-cursor='{cursor}' --no-pager --quiet --output=cat"
+        )
+        assert f"aether: rolling back to {standalone_base}" in journal, journal
+        assert "aether: ERROR:" not in journal, journal
+        no_policy_state()
   '';
 }

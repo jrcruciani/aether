@@ -32,6 +32,11 @@ sudo grants. If the helpers or setup are missing, stop. Do not improvise a rebui
 command or obtain broader sudo access. Do not claim an already-root agent is
 constrained by this setup.
 
+This flow requires the full `nixosModules.aether` bundle. The standalone
+`nixosModules.deadman` export is for human-operated timer use, not a replacement
+for apply/confirm/index or permission to use raw rebuild commands. Manual
+`aether-disarm` never grants apply confirmation.
+
 Run `sudo aether-status` and inspect source changes before a request. Stop for
 unexplained dirty files or an unresolved transaction. The helper refuses dirty
 paths outside this host's proposal files, including unrelated staged files.

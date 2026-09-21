@@ -14,6 +14,12 @@ The intended agent is a separate non-wheel account, not root. This is a scoped
 cooperative guardrail, not a hostile-Nix sandbox; packages and trusted modules
 can still contain privileged code.
 
+This playbook uses `nixosModules.aether`, the full bundle. A human who only wants
+to time-box a manual firewall test can use
+[`nixosModules.deadman`](../README.md#just-the-timer) without an agent account or
+policy setup. That module has no apply, confirm or index commands. It is not an
+alternative agent flow, and manual disarm does not grant apply confirmation.
+
 ## Rule one: git tracks it or Nix cannot see it
 
 Nix flakes ignore untracked files. The helper freezes the proposal in a root-owned
