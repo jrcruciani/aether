@@ -35,7 +35,7 @@ in
     import json
     import shlex
 
-    machine.start()
+    machine.start(allow_reboot=True)
     machine.wait_for_unit("multi-user.target")
     machine.wait_for_unit("sshd.service")
     repo = "/etc/nixos"
@@ -369,8 +369,11 @@ in
         propose(firewall_file, ${builtins.toJSON firewall})
         run("test")
         human_confirm()
+        previous_boot = machine.succeed("cat /proc/sys/kernel/random/boot_id").strip()
         machine.reboot()
+        machine.wait_for_qmp_event(lambda event: event.get("event") == "RESET", timeout=120)
         machine.wait_for_unit("sshd.service")
+        assert machine.succeed("cat /proc/sys/kernel/random/boot_id").strip() != previous_boot
         assert running() == good and head() == before
         machine.succeed("test -z \"$(find /run/aether -name 'confirmed-*' -print 2>/dev/null)\"")
         run("switch", fail=True)
