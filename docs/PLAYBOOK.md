@@ -1,360 +1,250 @@
 # The Aether playbook
 
-This is the operational core. Everything else in the repo supports what is written
-here.
+You are letting a language model change the machine it runs on. The model will
+occasionally be confidently wrong. Design for that, rather than hoping for a
+better model.
 
-The audience is two readers at once: a human deciding whether to trust this, and an
-agent that has been handed it as instructions. I have tried not to write it in a way
-that patronises either.
+NixOS gives us a reviewable description, a build before activation, and older
+generations. None of those alone prevents a firewall change from killing SSH.
+`aether-apply` owns the supported pipeline so remembering a prompt is no longer
+what decides whether the timer and human gate were used.
 
-## The premise
-
-You are letting a language model change a running system. The model will occasionally
-be confidently wrong. Design for that, rather than hoping for a better model.
-
-Three properties of NixOS make it survivable:
-
-Your system is a description. The agent does not need to guess what is installed, it
-reads the config. There is no drift between what the file says and what the machine
-is, so there is no archaeology.
-
-Changes are evaluated before they activate. A module that does not compile never
-reaches your running system. This eliminates an entire category of failure that would
-otherwise require you to notice it.
-
-Old generations persist. Every applied change leaves the previous system intact and
-bootable. Rollback is a boot menu entry, not a restore procedure.
-
-None of that helps if the agent runs `switch` on a broken firewall rule and drops
-your SSH session. Which is what the rest of this document is about.
+First complete [HARDENING.md](HARDENING.md) and the [rescue drill](RESCUE.md).
+The intended agent is a separate non-wheel account, not root. This is a scoped
+cooperative guardrail, not a hostile-Nix sandbox; packages and trusted modules
+can still contain privileged code.
 
 ## Rule one: git tracks it or Nix cannot see it
 
-Nix flakes only copy files tracked by git into the store. An untracked file is
-silently ignored. You will edit it, rebuild, see no change, and spend twenty minutes
-debugging a config the system never read.
+Nix flakes ignore untracked files. The helper freezes the proposal in a root-owned
+snapshot, runs `git add -A` there and stages those exact content objects in the
+managed checkout. It then runs the flake check and `nixos-rebuild build`, without
+updating the lock, and prints the real closure diff.
 
-So: `git add -A` after every edit, always, before any build. This is not tidiness,
-it is a functional requirement.
-
-Commit *after* the change is confirmed, not before: for R1 and R2, after a successful
-build; for R3, only after explicit human confirmation from a second SSH session and
-a successful `aether-disarm`, before the final switch. Tracking is enough for Nix.
-Committing a test early leaves a bad module ready for the next switch even if the
-timer rolls the running system back. One green commit per request.
-
-This example is for R1 and R2 only. R3 follows rule five instead.
+For R1/R2, use:
 
 ```bash
-git -C /etc/nixos status        # stop if dirty state cannot be explained
-# edit
-git add -A
-nix flake check                 # cheap gate, fast to fail
-nixos-rebuild build --flake .#vps
-git commit -m "one line: what and why"
+sudo aether-apply build --risk R1
+# Read the printed closure diff before proceeding.
+sudo aether-apply switch --risk R1
 ```
 
-`nix flake check` does not evaluate your whole configuration and can be slow on a
-system flake. Treat it as a cheap filter, not proof. The build is the real gate.
+Declare R2 for R2 work. One command per step; do not separately stage, commit or
+rebuild. The helper commits only after successful final activation. R3 additionally
+requires human confirmation and successful disarming first. A failed test stays
+uncommitted rather than becoming the next switch's ready-to-apply mistake.
+
+A flake check is a filter, not proof that the system is safe. The build validates
+configuration types; the closure diff shows what changes. Two requested CLI tools
+should not quietly pull in forty unrelated changes. The tool raises the floor at
+40 nonempty diff lines, but the human should review smaller surprises too.
 
 ## Rule two: one module per request, never touch configuration.nix
 
-The agent writes to `hosts/<name>/modules/agent/YYYY-MM-DD-topic.nix` and nowhere
-else. Your main configuration imports that directory and is otherwise read-only from
-the agent's point of view.
+Write `hosts/<host>/modules/agent/YYYY-MM-DD-topic.nix`. The human-owned
+`default.nix` automatically imports regular `.nix` files in sorted order.
+Never edit that loader, the trusted host files, the lock, or another host.
+The helper rejects dirty tracked, staged and untracked paths outside its allowed
+proposal files. A tracked `result` is a human setup error.
 
-This buys three things. The diff for any change is one new file, readable in ten
-seconds. Reverting is `rm`. And an agent editing a scoped file cannot accidentally
-mangle a line it was not asked to think about, which is the failure mode that makes
-people stop trusting these tools.
+The first reader deliberately supports only static assignments and literal
+values/lists/package references. Dynamic names, interpolation, imports, `let`,
+arbitrary functions and unsupported option families require manual review.
+Do not disguise unsupported behavior to get it past the reader.
 
-If the build fails, delete the generated module. Do not leave it staged for later.
-Later never comes and you will forget it is there.
+If the build fails, show the error and remove only the failed request's module.
+Run the build gate after cleanup. Do not delete unrelated dirty files or begin
+another request with an unresolved transaction.
 
 ## Rule three: classify before you act
 
-Say the level out loud before touching anything.
+Say the level and reason before touching anything, and declare it with `--risk`.
 
 | Level | Scope | Policy |
 | --- | --- | --- |
-| R0 | Read-only: diagnosis, explanation, log reading | Always allowed |
-| R1 | Packages, fonts, harmless userland programs | Normal flow |
-| R2 | Services, systemd timers, applications with no new network exposure | Normal flow plus a summary before applying |
-| R3 | Networking, firewall, SSH, kernel parameters, GPU | Hardened protocol. Rollback timer, test before switch, explicit human confirmation |
-| R4 | Users, secrets, filesystems, bootloader, disk encryption | Not applied by the agent. Emitted as manual instructions |
+| R0 | Reading, diagnosis, explanation | Read freely |
+| R1 | Packages, fonts, bounded user programs | Build/review/switch |
+| R2 | Supported services without new network exposure | Summarize, then normal flow |
+| R3 | Networking, firewall, SSH, kernel, hardware; uncertain service exposure | Automatic deadman test, separate human confirmation |
+| R4 | Users, secrets, filesystems, swap, bootloader, security and guardrail configuration | Human handoff; no automatic staging/build/activation |
 
-The R4 refusal is the one people push back on, so here is the reasoning. Rollback is
-the safety net that makes all the other levels acceptable. R4 changes are the ones
-that can damage the net itself: an encryption change you cannot undo without the old
-key, a bootloader change that makes old generations unbootable, a user change that
-removes the account you would log in with to fix it. When the recovery mechanism is
-what is at risk, a human should be typing.
+The tool uses the highest of the model declaration, lexical floor and closure-size
+floor. It scans deleted/previous definitions too; removing an SSH setting is still
+risky. Unknown syntax never defaults to low risk. R2 service support is bounded:
+the documented local PostgreSQL form includes explicit `enableTCPIP = false`,
+and PostgreSQL backup scheduling is supported. Ambiguous service exposure is
+at least R3, not an assertion that every service is safe.
 
-## Rule four: never `switch` as a child of the agent's own process
+R4 changes can damage the recovery mechanism itself. A bootloader change that
+removes old generations, a user change that removes your login, or a secret/key
+change is not made safe by a timer. Hand those proposals to a human.
 
-If the agent runs inside the machine it manages, this one will eventually bite you.
+## Rule four: never activate as a child of the agent's own process
 
-`nixos-rebuild switch` restarts systemd units during activation. If the rebuild is a
-child of your SSH session, or of a unit that gets restarted, it dies partway through
-and leaves the system half-applied. That is the worst possible state: not the old
-config, not the new one, and no clean way to describe what you are looking at.
+Activation restarts services. If it is a child of the SSH session or agent unit
+being restarted, it can die halfway through.
 
-Detach it.
+All supported agent activation uses `aether-apply test|switch`. The helper runs a
+private worker in `systemd-run --scope`, with detached input and root-owned
+logs/completion state rather than relying on the agent's terminal. That worker
+activates the frozen store path, performs final checks and commits on success.
+It does not re-evaluate the editable worktree.
 
-```bash
-systemd-run --scope --collect --unit=rb-$(date +%s) \
-  nixos-rebuild switch --flake .#vps
-```
-
-Then read the result from `journalctl -u rb-<unit>` rather than the stdout of a
-process that may not exist any more. Do this for every `switch`, `test` and `boot`,
-including the ones you think are safe. An application service sharing a cgroup with
-your agent is not always obvious from the config.
+There is no supported raw rebuild, direct activation, systemctl, nix-env or root
+shell workaround for the restricted agent. Use `sudo aether-status` for transaction
+and timer state. Report interrupted/failed completion instead of inferring success.
 
 ## Rule five: arm the rollback before you need it
 
-For anything at R3, stage and build without committing, then set a dead man's switch
-before applying. Stop if any command fails.
+Before R3, describe the proposed change and independent rescue layer, and obtain
+the human's go-ahead to test. This is not final approval.
 
 ```bash
-git add -A &&
-nix flake check &&
-nixos-rebuild build --flake .#vps &&
-aether-arm 10min &&
-systemd-run --scope --collect --unit=rb-$(date +%s) \
-  nixos-rebuild test --flake .#vps
+sudo aether-apply build --risk R3
+sudo aether-apply test --risk R3
 ```
 
-Stop here. The human must open a SECOND SSH session, keeping the first one open,
-and explicitly confirm they can still log in. The agent waits for that answer; it
-never confirms on the human's behalf.
+The helper automatically pins the known-good running system and arms the timer
+before activation. If arming fails, it refuses to activate. Test changes the running
+system but not the boot default and does not commit.
 
-Only after that confirmation, disarm successfully, commit, then switch. If disarming
-fails, stop; do not commit or switch.
+Stop. A DIFFERENT human principal opens a fresh second SSH session, keeps the first
+one open, checks access and reviews the exact candidate. In that session:
 
 ```bash
-aether-disarm &&
-git commit -m "<what and why>" &&
-systemd-run --scope --collect --unit=rb-$(date +%s) \
-  nixos-rebuild switch --flake .#vps
+sudo aether-confirm
 ```
 
-`aether-arm` comes from `services.aether.enable`, the module in `modules/deadman.nix`.
-Arm while the known-good system is still running. It records that system's store
-path in `/run/aether/rollback-target`; `aether-status` shows the pin and time left.
-When the timer fires, it sets the system profile to the pin and activates it,
-without rebuilding or evaluating a flake. `test` leaves the profile unchanged, so
-rolling it back one generation would go too far. A missing or invalid pin produces
-a journal warning and falls back to the current boot-default profile, not an older
-generation. A profile-update failure is reported but does not prevent an attempt
-to activate the recovery system. Disarming removes the pin.
+The agent never runs that command. Confirmation successfully disarms first, checks
+that recovery is not racing it, then writes a root-only, candidate-bound token in
+`/run/aether`. Failed disarm means no approval. A chat reply or manual
+`aether-disarm` is not a token. SSH freshness is human attestation, not a fact the
+helper can infer from an environment variable.
 
-Earlier versions of this playbook told you to arm the timer with a `systemd-run` line
-calling `nixos-rebuild switch --rollback`. Do not do that. It re-evaluates the flake
-and derives the configuration name from the hostname, so unless those two names
-happen to match it fails when it fires, which is the worst possible time to find out.
-See `docs/FIELD-NOTES-rollback-timer-2026-09.md`.
+Only then does the agent run:
 
-Two independent safety nets are running here. The timer reverts the machine on its
-own if you vanish. And `test` does not write the boot default, so a reboot returns
-you to the last known good generation regardless.
+```bash
+sudo aether-apply switch --risk R3
+```
 
-If the second session fails to connect, stop. Do not debug it from inside the first
-session by making another change. Let the timer fire or reboot into the previous
-generation.
+Approval is consumed before the exact candidate switches. Only successful final
+activation permits the helper's commit. Editing, rollback, reboot or another
+transaction invalidates the token; there is no model-accessible confirmation flag.
+
+`aether-arm` and `aether-disarm` remain human timer helpers, not extra agent sudo
+grants. The timer pins `/run/current-system` in `/run/aether/rollback-target`.
+Recovery sets the system profile to that path and activates it directly, never
+evaluating a flake or using `nixos-rebuild`. A test left the profile unchanged, so
+going back one generation would recover the wrong system. A missing/invalid pin
+warns and falls back to the current boot default. A profile-update failure still
+attempts recovery activation and returns an error.
+
+Recovery invalidates approval and cancels the recorded activation scope with
+bounded waits. It never waits indefinitely on an apply lock. State/cancellation
+failures remain loud rather than preventing the recovery attempt.
+
+If the fresh SSH session fails, stop and let the timer fire or reboot from the
+provider console. Do not disarm or debug by making another configuration change.
 
 ### Recovery after a failed second session
 
-Only after the timer has fired and rollback has completed, or the machine has
-rebooted into the previous generation, recover the repo. An inactive timer alone
-does not prove rollback completed. Do not disarm early to enter this branch.
-
-From the repo root, inspect `git status --short` and identify the exact module from
-the failed request. Replace `<host>` and `YYYY-MM-DD-topic.nix` below with that host
-and file, not a wildcard. Do not clean unrelated dirty files. If other requests or
-unexplained changes are present, stop and tell the human before staging anything.
-
-`aether-status` must succeed and print an exact `not armed` line before removing the
-file; it may also print a rollback-target line. Its exit code alone is not a check:
-it can succeed while printing `ARMED`. The block checks for the exact line and stops
-on command errors, including a failed status check, build or unreadable system path.
+Wait for actual recovery or a known-good reboot; an inactive timer alone does not
+prove the machine recovered. `sudo aether-status` must succeed and print an exact
+`not armed` line. Identify only the failed request's module:
 
 ```bash
-(
-  set -e
-  status=$(aether-status)
-  printf '%s\n' "$status"
-  if ! printf '%s\n' "$status" | grep -Fxq 'not armed'; then
-    printf '%s\n' 'stop: expected not armed; tell the human' >&2
-    exit 1
-  fi
-
-  rm -- hosts/<host>/modules/agent/YYYY-MM-DD-topic.nix
-  git add -A
-  nixos-rebuild build --flake .#<host>
-  built=$(readlink -f ./result)
-  running=$(readlink -f /run/current-system)
-  if [ "$built" = "$running" ]; then
-    printf '%s\n' 'repo matches running system'
-  else
-    printf '%s\n' 'repo and running system DIVERGE' >&2
-    exit 1
-  fi
-)
+rm -- hosts/<host>/modules/agent/YYYY-MM-DD-topic.nix
+sudo aether-apply build
 ```
 
-Report the result to the human and stop. If the build fails, show the error. If the
-paths differ, say `repo and running system DIVERGE`. Neither failure permits a
-follow-on commit or activation. The repository must build to exactly the running
-system before any further change. Do not switch to make the paths agree. Even a
-match only completes recovery; it does not approve another attempt at the failed
-request.
+The persistent pending gate requires that fresh build to equal
+`/run/current-system`. First, the running system and boot-default profile must
+both equal the captured recovery target, with no active recovery/activation.
+If profile update failed but activation restored SSH, a human must repair the
+boot default before proceeding. Only equality prints `repo matches running system`.
+`repo and running system DIVERGE`, a failed build, incomplete recovery or
+unexplained dirty files means stop: no commit, activation or new request.
+Do not switch to make the paths agree. Equality is recovery, not approval to retry.
+
+If confirmation already disarmed the timer and the source then changed, there is
+no timer to wait for. A human must use the helper's captured root-console recovery
+instructions before cleanup and the same build comparison. The agent cannot run
+those commands under the restricted sudo policy.
 
 ## Rule six: pick the right verb
 
-`build` compiles and activates nothing.
+`build` checks and builds, activating nothing. `test` activates without a persistent
+boot change. `switch` makes the reviewed candidate persistent. A direct R1/R2
+switch can perform the preparation pipeline first, but build/review/switch is the
+recommended conversational flow.
 
-`test` activates now but does not survive a reboot. Use it to try risky things.
-
-`boot` writes the boot default without activating now. Use it for kernel, initrd and
-bootloader changes, which cannot take effect on a running system anyway.
-
-`switch` does both. It is the normal ending, not the normal beginning.
+There is no agent `boot` verb. Kernel/initrd and all `hardware.*` changes may
+build, but test/switch refuse them, including GPU requests whose implicit
+driver/kernel effects the lexical reader cannot prove safe. Bootloader changes
+are R4 and refuse earlier. Hand the appropriate
+boot/reboot instructions to a human instead of pretending a live test covers them.
 
 ## Rule seven: ground the model in real options
 
-Hallucinated NixOS options are the most common failure by a wide margin. The model
-half-remembers an option name from a nixpkgs version that no longer exists, and you
-get an evaluation error with no obvious cause.
-
-Build from the host flake, not a channel that happens to be on the machine. After
-importing `aether.nixosModules.aether`, configure the helper once:
+Configure the explicit host key and reviewed local lock:
 
 ```nix
 services.aether = {
   enable = true;
-  flake = "/etc/nixos"; # the default; an absolute local directory
-  host = "vps";        # nixosConfigurations.vps, NOT networking.hostName
+  flake = "/etc/nixos";
+  host = "vps"; # not networking.hostName
+  agentUser = "agent"; # after completing HARDENING.md
 };
 ```
 
-Create, review and commit the host's `flake.lock` before using the index. Once the
-module is installed, run `aether-index` as root. It takes no arguments, requires
-that lock, and refuses to update it. A failed build leaves the old index in place.
-Omitting `host` does not break timer-only installs, but the index command fails
-with a setup message rather than guessing. Host keys may contain letters, digits,
-underscores and hyphens; flake directory paths may contain spaces, but not `#`,
-`?` or line breaks.
+Run `sudo aether-index` after setup, lock bumps and host-module changes. It builds
+the host's `config.system.build.manual.optionsJSON`, with `--no-update-lock-file`,
+and replaces `/var/lib/nixos-options` only on success. It accepts no arguments and
+never guesses the hostname. Host names use letters, digits, underscores or hyphens;
+absolute flake paths may contain spaces but not `#`, `?` or line breaks.
 
-The underlying build is this, with `<host>` replaced by the actual configuration
-key (the helper also passes `--no-update-lock-file`):
-
-```bash
-nix build /etc/nixos#nixosConfigurations.<host>.config.system.build.manual.optionsJSON \
-  -o /var/lib/nixos-options
-```
-
-That `-o` flag writes a symlink to a build output *directory*, not to a file, so the
-JSON you actually want to grep is one level down:
+The symlink points to a directory:
 
 ```bash
 grep -o '"services.openssh.enable"' \
   /var/lib/nixos-options/share/doc/nixos/options.json
-```
-
-Worth stating plainly because pointing an agent at the top-level path just gives it
-`IsADirectoryError` and it will improvise from there.
-
-That grep checks name presence, not the type of the value you plan to assign.
-For an authoritative type description from the same host:
-
-```bash
 nix eval --no-update-lock-file \
   /etc/nixos#nixosConfigurations.<host>.options.services.openssh.enable.type.description
 ```
 
-The JSON normally documents nixpkgs' base modules. Options declared by third-party
-or local modules need `documentation.nixos.includeAllModules = true`, or a direct
-query of the host's `.options` as above. Absence from the default JSON alone does
-not prove an imported option is invalid. The normal configuration build still
-has to check the values.
+Names are not type checks. The default JSON covers base nixpkgs modules;
+imported-module options may require querying `.options` directly or human-reviewed
+`documentation.nixos.includeAllModules = true`.
 
-On the tested 25.05 and 25.11 pins, `documentation.nixos.enable = false` removes
-`config.system.build.manual` altogether; so does `documentation.enable = false`.
-There is no standalone JSON attribute left to build. Keep both enabled for this
-command. If the aim is just to skip installing HTML docs, use
-`documentation.doc.enable = false` instead; the JSON build attribute remains.
-The helper does not secretly re-enable documentation or fall back to another
-nixpkgs. A failed regeneration means stop, not trust an old index.
-
-Run `aether-index` after every `flake.lock` bump or change to the host's modules.
-The index describes the locked configuration, which may not yet be the running
-generation. Consult it before writing, then use the build gate as usual.
+On the tested 25.05 and 25.11 pins, disabling `documentation.enable` or
+`documentation.nixos.enable` removes `config.system.build.manual`.
+`documentation.doc.enable = false` preserves options JSON while skipping HTML
+installation. The helper does not change documentation policy or use another
+nixpkgs to mask a failure. An old preserved index is not validated for a new config.
 
 ## Rule eight: confirmation belongs to the human, not the model
 
-An agent must not infer, anticipate, or assume your approval. A yes covers one
-change, not a category. "You approved a firewall edit yesterday" is not approval for
-today's firewall edit.
+One approval covers one exact candidate. The agent cannot write the root-only
+token, invoke confirm via its sudo grant, or raise its privilege through a flag.
+Another host, edited source, rollback, reboot or consumed token invalidates it.
+The proposing UID cannot be its own confirmer, including via a fresh same-account
+sudo session.
 
-Nixi implements this well by never exposing the `confirmed` flag in the tool schema
-the LLM sees, so the model is structurally unable to confirm on your behalf. If you
-are building tooling around this playbook, copy that. If you are running the playbook
-by hand in a chat window, the equivalent is discipline: the confirmation is a message
-you typed, not a state the agent decided you were in.
+These are workflow controls under the documented ownership and sudo assumptions.
+They do not constrain a root/wheel agent or establish a hostile-code sandbox.
 
-## Rescue hierarchy
+## Rescue, secrets and decision records
 
-Ordered by independence from the thing that just broke. Verify the top two work
-before your first real change, not after.
+The provider console plus a known root password is independent of SSH and the
+managed configuration. Practise it first. Older boot generations and provider
+snapshots are additional layers; an emergency SSH account lives in the same
+configuration and is a convenience, not the foundation. See [RESCUE.md](RESCUE.md).
 
-1. **Provider console (KVM/VNC).** Works with networking completely dead. Hetzner,
-   OVH, Vultr, DigitalOcean and Proxmox all have one. Find yours now.
-2. **A root password you actually know.** The only layer that depends on neither the
-   network nor the Nix config. Set it at install time, store it in a password manager.
-   Without this, the console shows you a login prompt you cannot get past, which is a
-   uniquely frustrating way to learn this lesson.
-3. **Older generation in the boot menu.** Reboot from the console, pick the previous
-   entry. Undoes any `switch`.
-4. **Provider snapshot.** Take one before large sessions. Hot snapshots are
-   crash-consistent; shut down first if you want a clean one.
-5. **Emergency SSH user.** Useful, but understand its limit: it is declared in the
-   same config being edited, so a bad change can delete it along with everything else.
-   It is a convenience layer, not the foundation. Layers 1 and 2 are the foundation.
+Never store, read, print or generate secret values in the agent workflow. Reference
+sops/agenix secrets by name and hand secret-management changes to a human.
 
-## Secrets
-
-Never in a plain git repo. Use [sops-nix](https://github.com/Mic92/sops-nix) or
-[agenix](https://github.com/ryantm/agenix) from the beginning. Retrofitting secret
-management after you have committed an API key means rewriting history, and you will
-miss one.
-
-The agent may reference a secret by name. It should not read, print, or generate
-secret values.
-
-## Decision records
-
-Keep an ADR in `docs/adr/NNNN-title.md` for every non-trivial choice: why this
-service, why that port, why you rejected the obvious alternative. Three months from
-now you will look at a config line and have no memory of the constraint that produced
-it.
-
-Put them in the same repo as the config, not in the agent's memory. Agent memory is
-not auditable, does not survive a tool change, and cannot be reviewed in a pull
-request. See [../docs/adr/0001-record-architecture-decisions.md](adr/0001-record-architecture-decisions.md)
-for the format.
-
-## Known limits
-
-Configurations vary enormously. What is idiomatic on one machine is wrong on another.
-Generated modules are a starting point.
-
-The syntax gate catches malformed Nix, not bad ideas. Semantic review is yours.
-
-`nixos-rebuild test` does change the running system. It does not change the boot
-default, which is not the same as changing nothing.
-
-An agent running inside the box it administers is a compromise. It is convenient and
-it is genuinely riskier than running from outside. The detached-rebuild and rollback
-timer rules exist to make it survivable, not to make it free. If you want the safer
-architecture, run the agent elsewhere and have it push changes over git.
+Record nontrivial choices using [ADR 0001's format](adr/0001-record-architecture-decisions.md).
+Have a human review and commit trusted-baseline documentation separately before
+an operational transaction; do not bypass the module-only dirty gate to stage an
+ADR. Historical field notes retain their original commands as evidence, not the
+current agent interface.

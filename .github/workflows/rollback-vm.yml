@@ -18,7 +18,19 @@ jobs:
       - name: Check KVM
         run: test -r /dev/kvm && test -w /dev/kvm
       - name: Run deadman VM
-        run: nix flake check --no-update-lock-file --print-build-logs
+        run: nix build .#checks.x86_64-linux.deadman --no-update-lock-file --print-build-logs
+
+  apply:
+    name: Restricted-account apply pipeline (NixOS VM)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31.11.1
+      - name: Check KVM
+        run: test -r /dev/kvm && test -w /dev/kvm
+      - name: Run policy and actual restricted-sudo apply VM
+        run: nix build .#checks.x86_64-linux.apply-policy .#checks.x86_64-linux.apply --no-update-lock-file --print-build-logs
 
   index:
     name: Host-pinned options index

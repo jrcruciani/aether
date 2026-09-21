@@ -8,8 +8,9 @@ laptop" and the agent writes a Nix module, compiles it, show you the diff, appli
 or, if the change locks you out the machine, rolls itself back before you panic.
 
 Aether is playbook, a set of rules, prompts and
-guardrails that turn any competent LLM agent into something you can trust with root
-on a NixOS box. The idea is to make the blast radius small enough that letting it roll stops being reckless.
+guardrails for a separate, restricted LLM-agent account on a NixOS box.
+It is a cooperative workflow guardrail, not a sandbox for hostile Nix or a way to
+constrain an agent that already has root.
 
 ## The longer bet
 
@@ -46,15 +47,18 @@ times, which is how two bugs in it were found. Those runs are written down in
 [docs/FIELD-NOTES-first-change-2026-09.md](docs/FIELD-NOTES-first-change-2026-09.md)
 and
 [docs/FIELD-NOTES-rollback-timer-2026-09.md](docs/FIELD-NOTES-rollback-timer-2026-09.md).
-R3 and R4 have not been exercised against anything except a careful reading.
+Those historical field notes predate the guarded apply entry point. The current
+checks include disposable-VM scenarios for restricted sudo, human confirmation,
+R4 refusal and recovery; see [the changelog](docs/CHANGELOG.md) for actual run
+evidence rather than treating a test's existence as a passing result.
 It has not been through a hundred hostile configurations. If you point it at
 something you care about without reading it first, that is on you.
 
 What exists today: the safety protocol, the system prompt, the rescue runbook,
-worked examples, a NixOS module packaging the rollback timer and pinned options
-index, and a Linux VM
-regression suite for recovery, disarming and competing arms. What does not exist:
-an agent CLI, a broad system test suite, multi-host support.
+worked examples, a NixOS module packaging `aether-apply`, human-only
+`aether-confirm`, the rollback timer and pinned options index, and Linux VM checks.
+What does not exist: an LLM conversation frontend, a semantic Nix security sandbox,
+a broad system test suite or multi-host apply support.
 
 ## Why bother
 
@@ -78,34 +82,42 @@ Every request you make goes through the same pipeline.
 you ask for something in plain language
   -> agent classifies the risk (R0 to R4)
   -> agent writes ONE isolated module into modules/agent/
-  -> git add, nix flake check, nixos-rebuild build
+  -> aether-apply build: freeze exact source, stage, check, build and show closure diff
   -> nothing has touched the running system yet
-  -> R1/R2: after a successful build, review the diff, commit, nixos-rebuild switch
-  -> R3: arm a rollback timer, then nixos-rebuild test; no commit yet
-  -> R3: stop and wait for your explicit second-SSH-session confirmation
-  -> R3: only after aether-disarm succeeds, commit, nixos-rebuild switch
+  -> R1/R2: review the diff, then aether-apply switch; helper commits after success
+  -> R3: aether-apply test auto-arms the rollback timer; no commit yet
+  -> R3: DIFFERENT human opens a fresh SSH session and runs aether-confirm
+  -> R3: confirmation disarms and authorizes only the exact tested candidate
+  -> R3: aether-apply switch consumes approval; helper commits only after success
 ```
 
 Your `configuration.nix` is read for context and never rewritten. Each change is one
-small file with a date in its name. Reverting is deleting a file. If the build
-fails, the generated module is removed rather than left half-applied.
+small file with a date in its name. The protected loader imports new proposal
+files automatically. The helper rejects dirty files elsewhere and unsupported
+dynamic syntax rather than pretending prefix scanning proves arbitrary Nix safe.
+See [HARDENING.md](docs/HARDENING.md) for the exact supported forms and setup.
 
 If the second session fails, stop and let the timer fire or reboot into the previous
-generation. Only once rollback has completed, check `aether-status`: it must succeed
+generation. Only once rollback has completed, check `sudo aether-status`: it must succeed
 and print an exact `not armed` line, even if it also prints the rollback target.
 From the repo root, remove exactly the failed
-request's `hosts/<host>/modules/agent/YYYY-MM-DD-topic.nix`, run `git add -A` and
-`nixos-rebuild build --flake .#<host>`, then compare `readlink -f ./result` with
-`readlink -f /run/current-system`. Report `repo matches running system` only if they
-are equal; otherwise report `repo and running system DIVERGE` and stop. A failed
-build also means stop and show the error, with no follow-on commit or activation.
+request's `hosts/<host>/modules/agent/YYYY-MM-DD-topic.nix` and run
+`sudo aether-apply build`. The persistent recovery gate compares the fresh build
+with `/run/current-system`: it prints `repo matches running system` only on
+equality, otherwise `repo and running system DIVERGE` and stops. A failed build
+also means stop, with no follow-on commit or activation.
+The recovered running system and boot-default profile must both match the
+captured known-good target first. Successful activation after a failed profile
+update does not clear that gate; a human must repair the boot default.
 Do not clean unrelated dirty files or stage another request's changes. The
 [post-rollback checklist](docs/RESCUE.md#post-rollback-checklist-for-a-failed-r3-test)
 has the guarded console commands. A match completes recovery, not approval to retry.
 
 ## Risk levels
 
-The agent announces the level before it touches anything.
+The agent announces and declares the level with `--risk` before acting. The helper
+uses the higher of that declaration, its conservative prefix floor and the
+closure-size floor (at least 40 nonempty diff lines). It never lowers a declaration.
 
 | Level | What it covers | Policy |
 | --- | --- | --- |
@@ -113,23 +125,29 @@ The agent announces the level before it touches anything.
 | R1 | Packages, fonts, user programs | Normal flow |
 | R2 | Services, timers, apps with no new network exposure | Normal flow, summary first |
 | R3 | Networking, firewall, SSH, kernel, GPU | Rollback timer, test before switch, explicit confirmation |
-| R4 | Users, secrets, disks, bootloader, encryption | Never applied automatically. Emitted as instructions for you to run |
+| R4 | Users, secrets, disks, swap, bootloader, security, guardrail policy | Refuse without staging/build/activation; emit human review instructions |
 
 R4 is the line I will not let an agent cross. Those are the changes where a failure
 is not fixed by rolling back, because the thing you would roll back with is gone.
+Kernel/initrd and all `hardware.*` changes, including GPU requests, are build-only
+in this iteration: the helper refuses live test/switch and hands boot/reboot
+decisions to a human.
 
 ## The rollback timer
 
-This is the piece I would keep even if you threw the rest away. Before applying
-anything that touches the network, arm it:
+This is the piece I would keep even if you threw the rest away. For an R3 proposal:
 
 ```bash
-aether-arm 10min
+sudo aether-apply build --risk R3
+sudo aether-apply test --risk R3
 ```
 
-Then apply with `nixos-rebuild test`. If you explicitly confirm you can still log in
-from a second SSH session, run `aether-disarm`; only if it succeeds, commit and
-switch. The agent cannot confirm for you. If you cannot log in, let the timer fire.
+The test command arms automatically and refuses activation if arming fails.
+A different human principal opens a fresh SSH session, reviews the candidate and
+runs `sudo aether-confirm`. That command owns successful disarming and writes a
+root-only, single-use token; the agent cannot confirm for you. Then the agent uses
+`sudo aether-apply switch --risk R3`, and the helper commits only after successful
+activation. If you cannot log in, let the timer fire.
 It restores the running system, not the repo: the failed module must still be
 removed and the repository-build comparison above must pass before another change.
 
@@ -148,13 +166,17 @@ NixOS module:
     rollbackTimeout = "10min";
     flake = "/etc/nixos"; # default; contains your reviewed flake.lock
     host = "vps";        # nixosConfigurations key, not the OS hostname
+    agentUser = "agent"; # after following docs/HARDENING.md
   };
 }
 ```
 
-That gives you `aether-arm`, `aether-disarm`, `aether-status` and `aether-index`.
+That gives you `aether-apply`, `aether-confirm`, `aether-arm`, `aether-disarm`,
+`aether-status` and `aether-index`.
 Nothing runs in the background and nothing touches your configuration on its own.
-Timer-only installs can omit `host`; the index command then reports a setup error.
+Enabling the module does not create accounts, grant sudo or fix permissions.
+Timer-only installs can omit `host` and `agentUser`; apply/confirm report setup
+errors and the index requires its explicit host.
 
 Run `aether-index` as root after setup and after each host `flake.lock` or module
 change. It builds
@@ -176,7 +198,10 @@ trying to get back to. If the pin is missing or invalid, recovery warns in the
 journal and uses the current boot-default profile instead. It still attempts
 activation if updating the profile fails, but reports the failure rather than
 pretending the boot default is safe. `aether-status` shows the pin and the timer's
-time remaining; `aether-disarm` stops the timer and removes the pin.
+time remaining; `aether-disarm` remains a human manual timer helper, not agent
+confirmation. During apply, the candidate and baseline also have GC roots.
+Rollback invalidates confirmation and cancels a blocked activation with bounded
+waits, without waiting indefinitely for an apply lock.
 
 The line this README used to tell you to paste did not work. It called
 `nixos-rebuild switch --rollback`, which re-evaluates your flake and looks for a
@@ -190,7 +215,7 @@ activating it.
 The regression suite lives in `tests/rollback.nix`, exposed once as
 `checks.x86_64-linux.deadman`. On x86_64 Linux with KVM, run
 `nix flake check --no-update-lock-file --print-build-logs`; GitHub Actions runs the
-same locked check in a disposable NixOS VM. It test-activates a prebuilt
+locked deadman target in a disposable NixOS VM. It test-activates a prebuilt
 specialisation that stops sshd, then waits for real timer recovery of the running
 path, system profile and SSH. It checks that the pin wins even when the boot
 default has moved, and that missing or invalid pins warn and fall back. Separate
@@ -199,8 +224,15 @@ losing the pin. Journal checks use a fresh cursor for each recovery and disarm
 scenario, and finished transient units must disappear, not just become inactive.
 This is a direct-boot VM check, not a bootloader test or permission to try the timer
 on a live host. It also checks that a timer-only install rejects `aether-index`
-without guessing a host. The locked `nixpkgs-test` input is only for this check.
+without guessing a host. The locked `nixpkgs-test` input is only for repository checks.
 Importing the module still uses your own `pkgs`.
+
+`checks.x86_64-linux.apply` exercises the actual account/sudoers setup, immutable
+builds, package activation, R3 human confirmation and refusal/recovery paths.
+`checks.x86_64-linux.apply-policy` covers the bounded reader and floor/threshold
+rules. CI runs the locked VM targets in separate jobs; the aggregate command
+above still covers all checks. This is disposable test infrastructure, not proof
+that hostile Nix has been sandboxed or that a production bootloader was tested.
 
 A separate Linux CI job runs `bash tests/index-pins.sh`: it copies the example
 host, locks it to a fixed 25.05 revision, generates real options, bumps the fixture
@@ -218,9 +250,9 @@ own loop will all work.
 
 1. Read [docs/PLAYBOOK.md](docs/PLAYBOOK.md). It is the actual product. About fifteen
    minutes.
-2. Set up your repo like [examples/](examples/) and get `nixos-rebuild build` passing.
-   Configure the helper's host key, review and commit your `flake.lock`, then run
-   `aether-index` as root to generate the options index.
+2. Set up your repo like [examples/](examples/), review and commit its lock, and
+   complete [HARDENING.md](docs/HARDENING.md) with separate accounts and protected
+   source ownership. Configure the explicit host key and generate the index.
 3. Feed [prompt/AETHER.md](prompt/AETHER.md) to your agent as a system prompt or
    project instruction file.
 4. Do the rescue drill in [docs/RESCUE.md](docs/RESCUE.md) *before* your first real
@@ -236,8 +268,10 @@ administers itself while you sleep, this will disappoint you on purpose, at leas
 This is not a substitute for reading your config. If you cannot read the module, do not
 approve it. The syntax gate catches malformed Nix, not bad ideas.
 
-It's not yet a package. There is no binary and no daemon. Some of this will probably become
-tooling later, but the rules matter more than the wrapper, and rules ship faster.
+It packages policy helpers, not an LLM frontend or an always-running agent daemon.
+The scanner deliberately refuses valid but unsupported Nix rather than
+overpromising isolation. Kernel/initrd/hardware test/switch and all R4 operations are human
+handoffs. Full root access or additive sudo grants bypass the account boundary.
 
 ## Prior art
 
