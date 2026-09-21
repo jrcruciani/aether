@@ -134,3 +134,30 @@ builds passed too: 22,116 options on 25.05 and 23,290 on 25.11. The apply check 
 the exact fixture/preload layout, persistent writable store and reboot coverage.
 This is disposable direct-boot VM evidence, not a live-host timer experiment or
 bootloader test. The final change after that run only adds this evidence entry.
+
+## 08: reject unsafe timer edge cases early
+
+Arm now checks the effective UID and parses the timeout with systemd before
+creating state or units, preserving an existing pin and timer on invalid input.
+Disarm checks rollback activity, transitions, queued jobs and the full bundle's
+recovery marker before stopping the timer or revoking approval, and retains a
+post-stop check.
+It refuses with `rollback in progress, do not interrupt` and never stops the
+rollback service; the checks are not an atomic barrier against concurrent
+recovery. The prompt explicitly stops on a pre-existing `ARMED` status, current
+proposal paths agree on `hosts/<host>/modules/agent/`, and module contributions
+now require a passing NixOS VM check or a real field note.
+
+The [combined Linux evidence run](https://github.com/jrcruciani/aether/actions/runs/35643134551)
+at code SHA `3fb73928a78b16bc2c558a630957527711895ed1`, after merging items 06
+and 07, passed all 20 deadman VM subtests. Nine new cases cover non-root rejection
+before writes, invalid spans before writes and with a live timer, valid/default
+spans with an empty caller PATH, active/activating/deactivating/queued rollback
+refusal preserving timer, pin and token state while real activation completes,
+and the recovery-marker guard. Existing recovery, 70-second disarm, concurrent
+arm, standalone and failing-hook coverage also passed. All 13 actual
+restricted-account apply scenarios and 17 policy tests passed, including human
+confirmation/disarm, blocked activation recovery and reboot. Both real index
+builds passed: 22,116 options on 25.05 and 23,290 on 25.11. The VM checks use
+locked NixOS 26.05 disposable direct-boot guests, not bootloader evidence or
+live-host timer testing. The final change after that run only appends this evidence paragraph.

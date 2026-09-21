@@ -37,7 +37,10 @@ This flow requires the full `nixosModules.aether` bundle. The standalone
 for apply/confirm/index or permission to use raw rebuild commands. Manual
 `aether-disarm` never grants apply confirmation.
 
-Run `sudo aether-status` and inspect source changes before a request. Stop for
+Run `sudo aether-status` before a request. If it reports `ARMED`, stop and tell
+the human: a leftover timer will revert whatever is applied next. Do not disarm
+it or begin another change. Stop if the status command fails.
+Inspect source changes too. Stop for
 unexplained dirty files or an unresolved transaction. The helper refuses dirty
 paths outside this host's proposal files, including unrelated staged files.
 A tracked `result` is a human setup error, not something to silently clean up.
@@ -149,6 +152,8 @@ sudo aether-apply test --risk R3
 ```
 
 The test step automatically arms the timer against the known-good running system.
+Arming requires root and validates the systemd time span before creating state
+or units; invalid input leaves any existing pin and timer untouched.
 If arming fails, it does not activate. `test` does not change the boot default and
 does not commit. Stop after the successful test.
 
@@ -162,6 +167,11 @@ sudo aether-confirm
 This is a human command, not an agent tool. Never run it for them. It disarms and
 writes a root-only, single-use token for the exact tested candidate. Failed disarm
 means no token. An agent's chat answer or a direct `aether-disarm` is not approval.
+Disarm refuses with `rollback in progress, do not interrupt` before stopping the
+timer or revoking approval if rollback is active, transitioning, queued or marked
+as recovering. It never stops the rollback service. It checks again after stopping
+the timer, but these checks are not atomic against concurrent recovery. On
+refusal, stop and let recovery finish; do not retry by stopping units yourself.
 The helper cannot independently prove SSH freshness; the human attests it.
 
 Only after that command succeeds:

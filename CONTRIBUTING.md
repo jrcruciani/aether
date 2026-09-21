@@ -57,6 +57,11 @@ test-only nixpkgs input, not the package set of a host importing the module. If
 you add Nix that is meant to evaluate, say what you tested and on which NixOS
 release. A disposable VM run is not a live-host field note.
 
+Any change under `modules/` must include a passing NixOS VM check or a real field
+note documenting the changed behavior, commands, outcome and NixOS release.
+Use the existing disposable VM checks for timer regressions rather than
+experimenting on live hosts. A timeout or failed assertion is not a pass.
+
 The options-index job separately runs `bash tests/index-pins.sh` on a disposable
 Linux runner with Nix, git, jq and sudo. It copies the example host, builds real
 options at two fixed host pins, and records their counts in the job summary.

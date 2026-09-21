@@ -7,7 +7,7 @@ in
 {
   name = "aether-deadman";
 
-  nodes.machine = { config, lib, ... }: {
+  nodes.machine = { config, lib, pkgs, ... }: {
     imports = [ exports.nixosModules.aether ];
     services.aether.enable = true;
     assertions = [{
@@ -22,6 +22,17 @@ in
     system.switch.enable = true;
     # The test driver boots the kernel directly, without a bootloader disk.
     boot.loader.grub.enable = false;
+
+    users.users.operator.isNormalUser = true;
+    system.activationScripts.aether-test-hold.text = ''
+      if [ -e /run/aether-test-enabled ]; then
+        ${pkgs.coreutils}/bin/touch /run/aether-test-entered
+        while [ -e /run/aether-test-hold ]; do
+          ${pkgs.coreutils}/bin/sleep 0.1
+        done
+        ${pkgs.coreutils}/bin/touch /run/aether-test-completed
+      fi
+    '';
 
     specialisation.sshd-off.configuration = {
       services.openssh.enable = lib.mkForce false;
@@ -68,6 +79,9 @@ in
   };
 
   testScript = ''
+    import json
+    import shlex
+
     machine.start()
     machine.wait_for_unit("sshd.service")
     base = machine.succeed("readlink -f /run/current-system").strip()
@@ -75,6 +89,9 @@ in
     profile = "/nix/var/nix/profiles/system"
     pin = "/run/aether/rollback-target"
     timer = "deadman-rollback.timer"
+    service = "deadman-rollback.service"
+    arm = "env -i PATH=/missing /run/current-system/sw/bin/aether-arm"
+    disarm = "env -i PATH=/missing /run/current-system/sw/bin/aether-disarm"
 
     with subtest("full bundle without agent configuration does not guess an index host"):
         error = machine.fail(
@@ -102,6 +119,53 @@ in
             "journalctl --sync && journalctl -u deadman-rollback.service "
             f"--after-cursor='{cursor}' --no-pager --quiet --output=cat"
         )
+
+    def timer_snapshot():
+        return machine.succeed(
+            f"systemctl show {timer} --property=ActiveState --property=InvocationID "
+            "--property=NextElapseUSecMonotonic --property=TimersMonotonic"
+        )
+
+    def pin_snapshot():
+        return machine.succeed(f"sha256sum {pin}; stat -c '%u:%g:%a:%i:%s:%Y' {pin}")
+
+    with subtest("non-root arm rejects before any state or unit writes"):
+        machine.fail("test -e /run/aether")
+        error = machine.fail(
+            "su -s /bin/sh operator -c " + shlex.quote(arm + " 5min") + " 2>&1"
+        )
+        assert "aether-arm must run as root; use sudo aether-arm" in error, error
+        assert "Permission denied" not in error, error
+        machine.fail("test -e /run/aether")
+        wait_for_collection()
+
+    with subtest("invalid spans reject before writes, including option-like input"):
+        for span in ("not-a-timespan", "-1s", "--help", ""):
+            error = machine.fail(arm + " " + shlex.quote(span) + " 2>&1")
+            assert "invalid rollback timeout" in error, error
+            machine.fail("test -e /run/aether")
+            wait_for_collection()
+
+    with subtest("invalid spans preserve an existing pin and live timer"):
+        machine.succeed(arm + " '5min 30s'")
+        before_pin, before_timer = pin_snapshot(), timer_snapshot()
+        for span in ("not-a-timespan", "-1s", "--help", ""):
+            error = machine.fail(arm + " " + shlex.quote(span) + " 2>&1")
+            assert "invalid rollback timeout" in error, error
+            assert before_pin == pin_snapshot()
+            assert before_timer == timer_snapshot()
+        machine.succeed(disarm)
+        machine.fail(f"test -e {pin}")
+        wait_for_collection()
+
+    with subtest("systemd spans and default timeout arm and disarm with closed PATH"):
+        for argument in ("", " '2min 500ms'", " 90", " 1.5min"):
+            machine.succeed(arm + argument)
+            machine.succeed(f"test \"$(cat {pin})\" = {base}")
+            machine.succeed(f"systemctl is-active --quiet {timer}")
+            machine.succeed(disarm)
+            machine.fail(f"test -e {pin}")
+            wait_for_collection()
 
     # Put a different system at N-1: --rollback would otherwise pass by accident.
     machine.succeed(f"nix-env --profile {profile} --set {broken}")
@@ -163,6 +227,117 @@ in
         status = machine.succeed("aether-status")
         assert "not armed" in status.splitlines(), status
         assert "rollback target: not pinned" in status.splitlines(), status
+
+    for state in ("active", "activating", "deactivating", "queued"):
+        with subtest(f"disarm refuses {state} rollback without interrupting activation or state"):
+            cursor = journal_cursor()
+            machine.succeed(arm + " 5min")
+            machine.succeed("touch /run/aether-test-enabled")
+            dropin = "/run/systemd/system/" + service + ".d/aether-test.conf"
+            if state in ("active", "activating"):
+                machine.succeed("touch /run/aether-test-hold")
+            if state == "activating":
+                configuration = "[Service]\nType=oneshot\n"
+            elif state == "deactivating":
+                machine.succeed("touch /run/aether-test-stop-hold")
+                configuration = (
+                    "[Service]\nExecStopPost=/bin/sh -c '"
+                    "/run/current-system/sw/bin/touch /run/aether-test-stopping; "
+                    "while test -e /run/aether-test-stop-hold; do /run/current-system/sw/bin/sleep 0.1; done; "
+                    "/run/current-system/sw/bin/touch /run/aether-test-stopped'\n"
+                )
+            elif state == "queued":
+                machine.succeed(
+                    "touch /run/aether-test-block && "
+                    "systemd-run --no-block --collect --unit=aether-test-blocker "
+                    "--property=Type=oneshot /bin/sh -c "
+                    + shlex.quote("while test -e /run/aether-test-block; do /run/current-system/sw/bin/sleep 0.1; done")
+                )
+                machine.wait_until_succeeds(
+                    "test \"$(systemctl show aether-test-blocker.service -p ActiveState --value)\" = activating"
+                )
+                configuration = "[Unit]\nAfter=aether-test-blocker.service\n"
+            else:
+                configuration = "[Service]\n"
+            machine.succeed(
+                f"mkdir -p /run/systemd/system/{service}.d && printf %s "
+                + shlex.quote(configuration) + f" > {dropin} && systemctl daemon-reload"
+            )
+            machine.succeed(f"systemctl start --no-block {service}")
+            expected_state = "inactive" if state == "queued" else state
+            machine.wait_until_succeeds(
+                f"test \"$(systemctl show {service} -p ActiveState --value)\" = {expected_state}"
+            )
+            if state in ("active", "activating"):
+                machine.wait_until_succeeds("test -e /run/aether-test-entered")
+                machine.fail("test -e /run/aether-test-completed")
+            elif state == "deactivating":
+                machine.wait_until_succeeds("test -e /run/aether-test-stopping")
+            else:
+                machine.wait_until_succeeds(
+                    f"systemctl list-jobs --no-legend | grep -E '{service} +start +waiting'"
+                )
+                machine.fail("test -e /run/aether-test-entered")
+
+            # Seed after recovery-begin: refusal must not revoke even a leftover token.
+            candidate = "/run/aether/candidate.json"
+            token = "/run/aether/confirmed-" + "a" * 64
+            machine.succeed(
+                "printf %s " + shlex.quote(json.dumps({"module_hash": "a" * 64}))
+                + f" > {candidate} && printf sentinel > {token} && chmod 600 {candidate} {token}"
+            )
+            snapshot_command = (
+                f"sha256sum {candidate} {token}; stat -c '%u:%g:%a:%i:%s:%Y' {candidate} {token}; "
+                f"systemctl show {service} -p ActiveState -p MainPID -p ControlPID -p InvocationID -p Job"
+            )
+            before_pin, before_timer = pin_snapshot(), timer_snapshot()
+            before_state = machine.succeed(snapshot_command)
+            error = machine.fail(disarm + " 2>&1")
+            assert "rollback in progress, do not interrupt" in error, error
+            assert before_pin == pin_snapshot()
+            assert before_timer == timer_snapshot()
+            assert before_state == machine.succeed(snapshot_command)
+            machine.succeed(f"systemctl is-active --quiet {timer}")
+            machine.succeed(
+                f"rm {candidate} {token}; "
+                "rm -f /run/aether-test-hold /run/aether-test-stop-hold /run/aether-test-block"
+            )
+            machine.wait_until_succeeds(
+                "test -e /run/aether-test-completed && "
+                f"test \"$(systemctl show {service} -p ActiveState --value)\" = inactive",
+                timeout=180,
+            )
+            if state == "deactivating":
+                machine.succeed("test -e /run/aether-test-stopped")
+            machine.succeed(
+                f"test \"$(systemctl show {service} -p ExecMainStatus --value)\" = 0 && "
+                f"test \"$(readlink -f /run/current-system)\" = {base} && "
+                f"test \"$(readlink -f {profile})\" = {base} && "
+                "systemctl is-active --quiet sshd.service"
+            )
+            journal = rollback_journal(cursor)
+            assert f"aether: rolling back to {base}" in journal, journal
+            assert "aether: ERROR:" not in journal, journal
+            machine.succeed(disarm)
+            machine.succeed(
+                f"rm {dropin} && systemctl daemon-reload && "
+                "rm -f /run/aether-test-enabled /run/aether-test-entered /run/aether-test-completed "
+                "/run/aether-test-stopping /run/aether-test-stopped"
+            )
+            wait_for_collection()
+
+    with subtest("a recovery marker refuses disarm even with an inactive service"):
+        machine.succeed(arm + " 5min")
+        machine.succeed("printf true > /run/aether/recovering.json")
+        before_pin, before_timer = pin_snapshot(), timer_snapshot()
+        error = machine.fail(disarm + " 2>&1")
+        assert "rollback in progress, do not interrupt" in error, error
+        assert before_pin == pin_snapshot()
+        assert before_timer == timer_snapshot()
+        machine.succeed("test \"$(cat /run/aether/recovering.json)\" = true")
+        machine.succeed("rm /run/aether/recovering.json")
+        machine.succeed(disarm)
+        wait_for_collection()
 
     with subtest("a second arm is rejected with a useful message"):
         machine.succeed("aether-arm 5min")
@@ -238,7 +413,7 @@ in
             "/run/current-system/sw/bin/aether-status",
             rollback,
         ):
-            standalone.fail(f"grep -E 'python|apply[.]py' {script}")
+            standalone.fail(f"grep -E 'python|apply[.]py|recovering[.]json' {script}")
         standalone.succeed("env -i PATH=/missing /run/current-system/sw/bin/aether-arm 5min")
         status = standalone.succeed("env -i PATH=/missing /run/current-system/sw/bin/aether-status")
         assert "ARMED" in status.splitlines() and standalone_base in status, status

@@ -88,7 +88,17 @@ let
     name = "aether-arm";
     runtimeInputs = [ pkgs.systemd pkgs.coreutils pkgs.util-linux ];
     text = ''
-      timeout="''${1:-${cfg.rollbackTimeout}}"
+      if [[ "$(id -u)" != 0 ]]; then
+        echo "aether: ERROR: aether-arm must run as root; use sudo aether-arm." >&2
+        exit 1
+      fi
+
+      timeout="''${1-${cfg.rollbackTimeout}}"
+      if ! systemd-analyze timespan -- "$timeout" >/dev/null; then
+        echo "aether: ERROR: invalid rollback timeout '$timeout'; timer not armed." >&2
+        exit 1
+      fi
+
       pin=/run/aether/rollback-target
       ${validateTarget}
 
@@ -143,6 +153,28 @@ let
     name = "aether-disarm";
     runtimeInputs = [ pkgs.systemd pkgs.coreutils pkgs.util-linux ] ++ applyRuntime;
     text = ''
+      require_rollback_quiet() {
+        local properties key value state=unknown job=unknown
+        if ! properties=$(systemctl show --all --property=ActiveState --property=Job ${cfg.unitName}.service); then
+          echo "aether: ERROR: cannot inspect rollback service; nothing disarmed." >&2
+          return 1
+        fi
+        while IFS='=' read -r key value; do
+          case "$key" in
+            ActiveState) state=$value ;;
+            Job) job=$value ;;
+          esac
+        done <<< "$properties"
+
+        # An inactive service can still have a queued start job.
+        if [[ ( "$state" != inactive && "$state" != failed ) ||
+              ( -n "$job" && "$job" != 0 && "$job" != "0 /" )
+              ${lib.optionalString withApply ''|| -e /run/aether/recovering.json''} ]]; then
+          echo "aether: ERROR: rollback in progress, do not interrupt." >&2
+          return 1
+        fi
+      }
+
       install -d -m 0700 /run/aether
       exec 9>/run/aether/lock
       if ! flock -x -w 5 9; then
@@ -150,6 +182,7 @@ let
         exit 1
       fi
 
+      require_rollback_quiet
       if ! systemctl is-active --quiet ${cfg.unitName}.timer; then
         echo "aether: nothing armed." >&2
         exit 1
@@ -157,10 +190,7 @@ let
 
       timeout 10s systemctl stop ${cfg.unitName}.timer
       ${lib.optionalString withApply ''python3 -I ${./apply.py} revoke''}
-      if systemctl is-active --quiet ${cfg.unitName}.service || [[ -e /run/aether/recovering.json ]]; then
-        echo "aether: ERROR: recovery is already running; no confirmation is permitted." >&2
-        exit 1
-      fi
+      require_rollback_quiet
       rm -f /run/aether/rollback-target
       echo "aether: disarmed. The change is yours to keep."
     '';
