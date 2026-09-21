@@ -37,12 +37,16 @@ debugging a config the system never read.
 So: `git add -A` after every edit, always, before any build. This is not tidiness,
 it is a functional requirement.
 
-Commit *after* the build passes, not before. Tracking is enough for Nix; committing
-early only fills your history with states that never worked. One green commit per
-request.
+Commit *after* the change is confirmed, not before: for R1 and R2, after a successful
+build; for R3, only after explicit human confirmation from a second SSH session and
+a successful `aether-disarm`, before the final switch. Tracking is enough for Nix.
+Committing a test early leaves a bad module ready for the next switch even if the
+timer rolls the running system back. One green commit per request.
+
+This example is for R1 and R2 only. R3 follows rule five instead.
 
 ```bash
-git -C /etc/nixos status        # clean, or stash what you cannot explain
+git -C /etc/nixos status        # stop if dirty state cannot be explained
 # edit
 git add -A
 nix flake check                 # cheap gate, fast to fail
@@ -109,21 +113,28 @@ your agent is not always obvious from the config.
 
 ## Rule five: arm the rollback before you need it
 
-For anything at R3, set a dead man's switch before applying.
+For anything at R3, stage and build without committing, then set a dead man's switch
+before applying. Stop if any command fails.
 
 ```bash
-# 1. Arm
-aether-arm 10min
-
-# 2. Activate without persisting
+git add -A &&
+nix flake check &&
+nixos-rebuild build --flake .#vps &&
+aether-arm 10min &&
 systemd-run --scope --collect --unit=rb-$(date +%s) \
   nixos-rebuild test --flake .#vps
+```
 
-# 3. Open a SECOND SSH session. Do not close the first one.
-#    Confirm you can still get in.
+Stop here. The human must open a SECOND SSH session, keeping the first one open,
+and explicitly confirm they can still log in. The agent waits for that answer; it
+never confirms on the human's behalf.
 
-# 4. Only now, disarm and persist
-aether-disarm
+Only after that confirmation, disarm successfully, commit, then switch. If disarming
+fails, stop; do not commit or switch.
+
+```bash
+aether-disarm &&
+git commit -m "<what and why>" &&
 systemd-run --scope --collect --unit=rb-$(date +%s) \
   nixos-rebuild switch --flake .#vps
 ```
@@ -140,7 +151,54 @@ own if you vanish. And `test` does not write the boot default, so a reboot retur
 you to the last known good generation regardless.
 
 If the second session fails to connect, stop. Do not debug it from inside the first
-session by making another change. Let the timer fire.
+session by making another change. Let the timer fire or reboot into the previous
+generation.
+
+### Recovery after a failed second session
+
+Only after the timer has fired and rollback has completed, or the machine has
+rebooted into the previous generation, recover the repo. An inactive timer alone
+does not prove rollback completed. Do not disarm early to enter this branch.
+
+From the repo root, inspect `git status --short` and identify the exact module from
+the failed request. Replace `<host>` and `YYYY-MM-DD-topic.nix` below with that host
+and file, not a wildcard. Do not clean unrelated dirty files. If other requests or
+unexplained changes are present, stop and tell the human before staging anything.
+
+`aether-status` must print `not armed` before removing the file. Its exit code alone
+is not a check: it can succeed while printing `ARMED`. The block checks the output
+and stops on command errors, including a failed build or an unreadable system path.
+
+```bash
+(
+  set -e
+  status=$(aether-status)
+  printf '%s\n' "$status"
+  if [ "$status" != "not armed" ]; then
+    printf '%s\n' 'stop: expected not armed; tell the human' >&2
+    exit 1
+  fi
+
+  rm -- hosts/<host>/modules/agent/YYYY-MM-DD-topic.nix
+  git add -A
+  nixos-rebuild build --flake .#<host>
+  built=$(readlink -f ./result)
+  running=$(readlink -f /run/current-system)
+  if [ "$built" = "$running" ]; then
+    printf '%s\n' 'repo matches running system'
+  else
+    printf '%s\n' 'repo and running system DIVERGE' >&2
+    exit 1
+  fi
+)
+```
+
+Report the result to the human and stop. If the build fails, show the error. If the
+paths differ, say `repo and running system DIVERGE`. Neither failure permits a
+follow-on commit or activation. The repository must build to exactly the running
+system before any further change. Do not switch to make the paths agree. Even a
+match only completes recovery; it does not approve another attempt at the failed
+request.
 
 ## Rule six: pick the right verb
 

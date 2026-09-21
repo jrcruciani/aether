@@ -27,6 +27,9 @@ more than any rule in the playbook.
 ## You are locked out
 
 Work down this list. Each step is more independent of the failure than the one above.
+Once a failed R3 test has rolled back or rebooted into the previous generation,
+leave this list and follow the post-rollback checklist below before any further
+change. Getting a shell back does not mean the repo is safe to apply.
 
 ### 1. Wait ten minutes
 
@@ -61,7 +64,8 @@ nix-env --switch-generation <N> --profile /nix/var/nix/profiles/system
 
 ### 4. Fix the config from the console
 
-You have a shell. Edit the offending module, or delete it:
+For an already committed change, use the history to undo it. An unconfirmed R3 test
+has no commit to revert; use the post-rollback checklist instead.
 
 ```bash
 cd /etc/nixos
@@ -77,6 +81,52 @@ about what happened.
 
 Last resort. You lose everything since the snapshot was taken, so check the timestamp
 before you commit to it. Provider panel, restore, wait.
+
+## Post-rollback checklist for a failed R3 test
+
+Only after the timer has fired and rollback has completed, or the machine has
+rebooted into the previous generation, recover the repo. An inactive timer alone
+does not prove rollback completed. Do not disarm early to enter this branch.
+
+At the console, change to your configuration repo (`cd /etc/nixos` for the usual
+layout). Inspect `git status --short` and identify the exact module from the failed
+request. Replace `<host>` and `YYYY-MM-DD-topic.nix` below with that host and file,
+not a wildcard. Do not clean unrelated dirty files. If other requests or unexplained
+changes are present, stop and tell the human before staging anything.
+
+`aether-status` must print `not armed` before removing the file. Its exit code alone
+is not a check: it can succeed while printing `ARMED`. The block checks the output
+and stops on command errors, including a failed build or an unreadable system path.
+
+```bash
+(
+  set -e
+  status=$(aether-status)
+  printf '%s\n' "$status"
+  if [ "$status" != "not armed" ]; then
+    printf '%s\n' 'stop: expected not armed; tell the human' >&2
+    exit 1
+  fi
+
+  rm -- hosts/<host>/modules/agent/YYYY-MM-DD-topic.nix
+  git add -A
+  nixos-rebuild build --flake .#<host>
+  built=$(readlink -f ./result)
+  running=$(readlink -f /run/current-system)
+  if [ "$built" = "$running" ]; then
+    printf '%s\n' 'repo matches running system'
+  else
+    printf '%s\n' 'repo and running system DIVERGE' >&2
+    exit 1
+  fi
+)
+```
+
+Report the result to the human and stop. If the build fails, show the error. If the
+paths differ, say `repo and running system DIVERGE`. Neither failure permits a
+follow-on commit or activation. Do not switch to make the paths agree. The repo must
+build to exactly the running system before any further change. A match completes
+recovery, not approval to retry; the agent never confirms on the human's behalf.
 
 ## Things that will not save you
 
