@@ -1,7 +1,10 @@
 import importlib.util
+import os
 from pathlib import Path
 import sys
+from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -41,6 +44,7 @@ class Policy(unittest.TestCase):
             'boot.kernelParams = [ "quiet" ];',
             "boot.kernelPackages = pkgs.linuxPackages;",
             "boot.initrd.systemd.enable = true;",
+            "hardware.graphics.enable = true;",
         ):
             with self.subTest(body=body):
                 risk = self.risk(body)
@@ -71,6 +75,7 @@ class Policy(unittest.TestCase):
             '{ environment.etc."secret".text = "bad"; }',
             '{ systemd.services.demo.script = "echo root"; }',
             '{ services.demo.preStart = "echo root"; }',
+            '{ networking.firewall.extraCommands = "echo root"; }',
             '{ services.demo.settings.path = "${builtins.readFile /etc/shadow}"; }',
             '{ environment.systemPackages = pkgs.lib.attrValues pkgs; }',
         ):
@@ -82,6 +87,7 @@ class Policy(unittest.TestCase):
           # networking.firewall.enable = false;
           /* users.users.evil = {}; */
           fonts.fontconfig.defaultFonts.monospace = [ "security.notAnOption" ];
+          fonts.fontconfig.defaultFonts.serif = [ "with" "[" "}" ];
         ''')
         self.assertEqual(risk.level, 1)
 
@@ -110,6 +116,42 @@ class Policy(unittest.TestCase):
         for key in candidate:
             changed = {**candidate, key: "different"}
             self.assertNotEqual(token, apply.token_context(changed), key)
+
+    def test_privileged_subprocess_environment_is_not_inherited(self):
+        with patch.dict(os.environ, {
+            "GIT_CONFIG_COUNT": "1", "GIT_SSH_COMMAND": "untrusted",
+            "NIX_REMOTE": "untrusted", "PYTHONPATH": "untrusted", "BASH_ENV": "untrusted",
+        }):
+            env = apply.environment({"path": "/declared/tools"})
+        self.assertEqual(env["PATH"], "/declared/tools")
+        for key in ("GIT_CONFIG_COUNT", "GIT_SSH_COMMAND", "NIX_REMOTE", "PYTHONPATH", "BASH_ENV"):
+            self.assertNotIn(key, env)
+        self.assertIn("accept-flake-config = false", env["NIX_CONFIG"])
+
+    def test_sudo_identity_is_original_uid_not_effective_root(self):
+        with patch.object(apply.os, "geteuid", return_value=0):
+            with patch.dict(os.environ, {}, clear=True):
+                self.assertEqual(apply.principal(), 0)
+            with patch.dict(os.environ, {"SUDO_UID": "1001", "SUDO_USER": "agent"}, clear=True):
+                with patch.object(apply.pwd, "getpwuid", return_value=SimpleNamespace(pw_name="agent")):
+                    self.assertEqual(apply.principal(), 1001)
+                with patch.object(apply.pwd, "getpwuid", return_value=SimpleNamespace(pw_name="human")):
+                    with self.assertRaises(apply.Error):
+                        apply.principal()
+            with patch.dict(os.environ, {"SUDO_UID": "1001"}, clear=True):
+                with self.assertRaises(apply.Error):
+                    apply.principal()
+        with patch.object(apply.os, "geteuid", return_value=1001):
+            with self.assertRaises(apply.Error):
+                apply.principal()
+
+    def test_duplicate_flags_fail_before_any_privileged_setup(self):
+        for args in (
+            ["build", "--risk=R1", "--risk=R3"],
+            ["build", "--host=fixture", "--host=another"],
+        ):
+            with self.subTest(args=args), self.assertRaisesRegex(apply.Error, "only once"):
+                apply.apply({}, args)
 
 
 if __name__ == "__main__":

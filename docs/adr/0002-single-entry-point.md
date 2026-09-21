@@ -28,8 +28,10 @@ Use the explicitly configured flake directory and host key, never the hostname.
 Read a deliberately restricted static module syntax, assign conservative risk
 floors and refuse unsupported constructs. A model declaration can raise the level
 but cannot lower it. A large closure diff also raises the floor. R4 is a manual
-handoff without staging, building or activation; boot-only changes do not enter
-the live test/switch path.
+handoff without staging, building or activation; kernel/initrd and hardware
+changes do not enter the live test/switch path. Hardware options can imply kernel
+changes that a lexical reader cannot safely distinguish, so this iteration sends
+all of them to a human for boot/reboot decisions.
 
 Scan and build the same root-owned candidate snapshot. Stage its exact content,
 show the real closure diff and activate only its built store path in a separate

@@ -126,6 +126,9 @@ closure-size floor (at least 40 nonempty diff lines). It never lowers a declarat
 
 R4 is the line I will not let an agent cross. Those are the changes where a failure
 is not fixed by rolling back, because the thing you would roll back with is gone.
+Kernel/initrd and all `hardware.*` changes, including GPU requests, are build-only
+in this iteration: the helper refuses live test/switch and hands boot/reboot
+decisions to a human.
 
 ## The rollback timer
 
@@ -264,7 +267,7 @@ approve it. The syntax gate catches malformed Nix, not bad ideas.
 
 It packages policy helpers, not an LLM frontend or an always-running agent daemon.
 The scanner deliberately refuses valid but unsupported Nix rather than
-overpromising isolation. Kernel/initrd test/switch and all R4 operations are human
+overpromising isolation. Kernel/initrd/hardware test/switch and all R4 operations are human
 handoffs. Full root access or additive sudo grants bypass the account boundary.
 
 ## Prior art

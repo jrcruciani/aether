@@ -197,8 +197,10 @@ permit executing those console commands.
 `aether-apply`; never call rebuild, direct activation, systemctl, nix-env or a
 general root shell as a workaround.
 
-There is no agent `boot` verb. Kernel/initrd changes may build but test/switch
-refuse them. Bootloader and other R4 changes refuse even staging/building. Hand
+There is no agent `boot` verb. Kernel/initrd and all `hardware.*` changes may build
+but test/switch refuse them, including GPU requests: their implicit driver/kernel
+effects are outside the lexical reader's proof. Bootloader and other R4 changes
+refuse even staging/building. Hand
 the proposed modules and appropriate boot/reboot instructions to a human.
 
 Never write, read, print or generate secret values. Reference sops/agenix secrets

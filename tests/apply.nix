@@ -147,7 +147,7 @@ in
         agent("rm " + proposals + "/default.nix", fail=True)
         agent("printf bad > " + proposals + "/default.nix", fail=True)
         agent(f"sudo -n NIX_REMOTE=ssh://invalid {apply} build", fail=True)
-        run("build")
+        agent(f"env -i PATH=/missing /run/wrappers/bin/sudo -n {apply} build")
         run("build", risk="R3")
         error = run("switch", fail=True)
         assert "R3 switch requires" in error, error
@@ -183,6 +183,19 @@ in
         agent(f"ln -s /etc/passwd {proposals}/link.nix")
         run("build", fail=True)
         agent(f"rm {proposals}/link.nix")
+
+    with subtest("hardware and kernel are R3 build-only, never a silent live test"):
+        for body in (
+            "{ hardware.graphics.enable = true; }",
+            '{ boot.kernelParams = [ "quiet" ]; }',
+        ):
+            propose(proposals + "/boot-only.nix", body)
+            before = machine.succeed(f"git -C {repo} write-tree; git -C {repo} rev-parse HEAD")
+            for verb in ("test", "switch"):
+                error = run(verb, fail=True)
+                assert "effective risk R3" in error and "build-only" in error, error
+            assert before == machine.succeed(f"git -C {repo} write-tree; git -C {repo} rev-parse HEAD")
+            agent("rm " + proposals + "/boot-only.nix")
 
     with subtest("R1 ripgrep and fd build and switch exact staged/new module"):
         before = head()
@@ -288,7 +301,7 @@ in
         machine.succeed(
             "touch /run/block-candidate && "
             "systemd-run --unit=fixture-agent-apply /bin/sh -c "
-            + shlex.quote(f"su -s /bin/sh agent -c 'sudo -n {apply} test'")
+            + shlex.quote(f"su -s /bin/sh agent -c '/run/wrappers/bin/sudo -n {apply} test'")
         )
         machine.wait_until_succeeds(f"systemctl is-active --quiet {timer}", timeout=60)
         machine.wait_until_succeeds(

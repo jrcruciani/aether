@@ -129,11 +129,11 @@ class ModuleReader:
 
     def peek(self, value=None):
         item = self.items[self.pos] if self.pos < len(self.items) else ("end", "")
-        return item if value is None else item[1] == value
+        return item if value is None else item[0] != "string" and item[1] == value
 
     def take(self, value=None):
         item = self.peek()
-        if item[0] == "end" or (value is not None and item[1] != value):
+        if item[0] == "end" or (value is not None and not self.peek(value)):
             raise Refusal(f"expected {value or 'a value'}, found {item[1] or 'end of module'}")
         self.pos += 1
         return item
@@ -141,9 +141,8 @@ class ModuleReader:
     def read(self):
         # Only a plain argument set is accepted, without defaults or expressions.
         if self.peek("{"):
-            end = next((i for i, item in enumerate(self.items)
-                        if item[1] == "}"), -1)
-            if end >= 0 and end + 1 < len(self.items) and self.items[end + 1][1] == ":":
+            end = next((i for i, item in enumerate(self.items) if item[0] == "}"), -1)
+            if end >= 0 and end + 1 < len(self.items) and self.items[end + 1][0] == ":":
                 args = self.items[1:end]
                 if any(kind != "," and not (kind == "word" and value in
                        {"pkgs", "config", "lib", "options", "modulesPath", "..."})
@@ -229,9 +228,15 @@ def scan_module(source):
     risk = Risk()
     postgres_local = assignments.get("services.postgresql.enableTCPIP") is False
     for name, value in assignments.items():
+        if any(part in {
+                "script", "preStart", "postStart", "preStop", "postStop",
+                "extraCommands", "extraStopCommands", "localCommands",
+                "preCommands", "postCommands", "postBootCommands",
+        } for part in name.split(".")):
+            raise Refusal(f"executable setting {name} requires manual review")
         if any(matches(name, prefix) for prefix in R3):
             risk.raise_to(3, name)
-            risk.boot_only |= name.startswith("boot.kernel")
+            risk.boot_only |= name.startswith("boot.kernel") or matches(name, "hardware")
         elif name.startswith("boot.initrd"):
             risk.raise_to(3, name)
             risk.boot_only = True
@@ -249,9 +254,6 @@ def scan_module(source):
         elif name in ("services.postgresqlBackup.enable", "services.postgresqlBackup.startAt"):
             risk.raise_to(2, "PostgreSQL backup schedule")
         elif name.startswith("services."):
-            if any(part in {"script", "preStart", "postStart", "preStop", "postStop"}
-                   for part in name.split(".")):
-                raise Refusal(f"executable service setting {name} requires manual review")
             risk.raise_to(3, f"service exposure is not established: {name}")
         else:
             raise Refusal(f"unsupported option family {name}")
@@ -704,15 +706,20 @@ def invalidate_pending(candidate, reason):
     raise Error(reason)
 
 
-def finish(candidate):
-    revoke(candidate)
-    (STATE / "pending.json").unlink(missing_ok=True)
-    (RUN / "candidate.json").unlink(missing_ok=True)
-    (RUN / "rollback-target").unlink(missing_ok=True)
+def remove_candidate_files(candidate):
     folder = Path(candidate["folder"])
     if folder.parent != STATE / "candidates" or not re.fullmatch(r"[0-9a-f]{32}", folder.name):
         raise Error("invalid transaction cleanup path")
-    shutil.rmtree(folder)
+    if folder.exists():
+        shutil.rmtree(folder)
+
+
+def finish(candidate):
+    revoke(candidate)
+    remove_candidate_files(candidate)
+    (RUN / "rollback-target").unlink(missing_ok=True)
+    (RUN / "candidate.json").unlink(missing_ok=True)
+    (STATE / "pending.json").unlink(missing_ok=True)
 
 
 def recovery_build(config, repo, proposals, view, risk, caller, pending):
@@ -724,6 +731,7 @@ def recovery_build(config, repo, proposals, view, risk, caller, pending):
     if candidate["system"] != canonical_system("/run/current-system"):
         revoke(pending)
         save_candidate(pending, pending=True)
+        remove_candidate_files(candidate)
         raise Error("repo and running system DIVERGE; no commit, activation or new request is allowed")
     finish(pending)
     # The fresh build stays available, but equality is not permission to retry.
@@ -799,12 +807,21 @@ def apply(config, arguments):
               " from the console; see docs/HARDENING.md.", file=sys.stderr)
         raise
     show_risk(risk)
+    if risk.boot_only and args.verb != "build":
+        raise Refusal("boot/kernel/hardware changes are build-only; a human must choose boot and reboot")
     with operation_lock():
         previous = candidate_state()
         pending = read_json(STATE / "pending.json")
         if pending:
-            if pending["phase"] in ("testing", "switching") and active(config, f"aether-apply-{pending['id']}.scope"):
+            if (pending["phase"] in ("testing", "switching", "committing", "completed") and
+                    active(config, f"aether-apply-{pending['id']}.scope")):
                 raise Error("the detached activation worker is still busy")
+            if pending["phase"] in ("committing", "completed") and commit_observed(config, pending):
+                if (canonical_system("/run/current-system") != pending["system"] or
+                        canonical_system(PROFILE) != pending["system"] or not recovery_quiet(config)):
+                    raise Error("a committed transaction has unexpected live state; use human console recovery")
+                finish(pending)
+                raise Error("finalized the previous activated commit; rerun your requested command")
             if pending["boot"] != boot_id():
                 revoke(pending)
                 pending["phase"] = "recovery-required"
@@ -832,11 +849,13 @@ def apply(config, arguments):
             if not recovery_quiet(config):
                 raise Error("an existing timer or recovery is active; no new candidate may be built")
             candidate = frozen_candidate(config, repo, proposals, view, risk, caller)
+            if previous and not pending and previous["id"] != candidate["id"]:
+                remove_candidate_files(previous)
         if args.verb == "build":
             print(f"aether: built {candidate['system']}; activates nothing")
             return
         if candidate["boot_only"]:
-            raise Refusal("boot/kernel changes cannot use test or switch; a human must use boot and reboot")
+            raise Refusal("boot/kernel/hardware changes are build-only; a human must choose boot and reboot")
         if candidate["risk"] >= 3 and args.verb == "switch":
             token = read_json(token_path(candidate))
             if (candidate["phase"] != "confirmed" or token != token_context(candidate)
@@ -855,6 +874,8 @@ def apply(config, arguments):
         )
         if canonical_system("/run/current-system") != candidate["expected_running"]:
             raise Error("running system changed since preparation; rebuild/review a fresh candidate")
+        if candidate["phase"] == "prepared":
+            candidate["proposer"] = caller
         candidate["phase"] = "testing" if args.verb == "test" else "switching"
         candidate["verb"] = args.verb
         save_candidate(candidate, pending=True)
@@ -896,16 +917,26 @@ def commit_candidate(config, candidate):
     repo = Path(config["flake"])
     if not unchanged(config, candidate):
         raise Error("source changed during activation; refusing to commit")
-    if candidate["tree"] == git_text(config, repo, "rev-parse", candidate["head"] + "^{tree}"):
-        return
-    names = ", ".join(Path(name).stem for name in candidate["changed"])
-    message = f"Apply Aether: {names}\n\nRisk R{candidate['risk']}; activated {candidate['system']}.\n"
-    identity = {"GIT_AUTHOR_NAME": "Aether", "GIT_AUTHOR_EMAIL": "aether@localhost",
-                "GIT_COMMITTER_NAME": "Aether", "GIT_COMMITTER_EMAIL": "aether@localhost"}
-    commit = git(config, repo, "commit-tree", candidate["tree"], "-p", candidate["head"],
-                 "-m", message, extra_env=identity).stdout.decode().strip()
+    commit = candidate["head"]
+    if candidate["tree"] != git_text(config, repo, "rev-parse", candidate["head"] + "^{tree}"):
+        names = ", ".join(Path(name).stem for name in candidate["changed"])
+        message = f"Apply Aether: {names}\n\nRisk R{candidate['risk']}; activated {candidate['system']}.\n"
+        identity = {"GIT_AUTHOR_NAME": "Aether", "GIT_AUTHOR_EMAIL": "aether@localhost",
+                    "GIT_COMMITTER_NAME": "Aether", "GIT_COMMITTER_EMAIL": "aether@localhost"}
+        commit = git(config, repo, "commit-tree", candidate["tree"], "-p", candidate["head"],
+                     "-m", message, extra_env=identity).stdout.decode().strip()
+    candidate["commit"] = commit
+    candidate["phase"] = "committing"
+    save_candidate(candidate, pending=True)
     git(config, repo, "update-ref", "HEAD", commit, candidate["head"])
+    candidate["phase"] = "completed"
+    save_candidate(candidate, pending=True)
     print(f"aether: committed exact activated tree {commit}", flush=True)
+
+
+def commit_observed(config, candidate):
+    return bool(candidate.get("commit")) and (
+        git_text(config, Path(config["flake"]), "rev-parse", "HEAD") == candidate["commit"])
 
 
 def worker(config, identity):
@@ -955,7 +986,11 @@ def worker(config, identity):
             if candidate["risk"] >= 3:
                 print("aether: stop. A DIFFERENT human must open a fresh SSH session and run aether-confirm.", flush=True)
     except (Error, OSError) as exc:
-        if candidate.get("activation_started") or (
+        if commit_observed(config, candidate):
+            print("aether: ERROR: system was activated and committed, but completion cleanup failed;"
+                  " do not roll it back as an uncommitted test. Rerun apply to finalize.",
+                  file=sys.stderr, flush=True)
+        elif candidate.get("activation_started") or (
                 candidate["verb"] == "switch" and canonical_system(PROFILE) != candidate["baseline"]):
             request_recovery(config, candidate, str(exc))
         else:
@@ -1018,6 +1053,9 @@ def show_status():
         print(f"candidate: {candidate['module_hash']}")
         print(f"risk: R{candidate['risk']}")
         print(f"built system: {candidate.get('system', 'not built')}")
+        print(f"recovery system: {candidate.get('baseline', 'not captured')}")
+        if candidate["phase"] == "confirmed":
+            print("human token: " + ("present" if token_path(candidate).is_file() else "missing"))
         if candidate.get("error"):
             print(f"apply error: {candidate['error']}")
         if candidate["boot"] != boot_id():

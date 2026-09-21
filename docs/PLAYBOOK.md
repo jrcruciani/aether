@@ -175,8 +175,10 @@ boot change. `switch` makes the reviewed candidate persistent. A direct R1/R2
 switch can perform the preparation pipeline first, but build/review/switch is the
 recommended conversational flow.
 
-There is no agent `boot` verb. Kernel/initrd changes may build, but test/switch
-refuse them. Bootloader changes are R4 and refuse earlier. Hand the appropriate
+There is no agent `boot` verb. Kernel/initrd and all `hardware.*` changes may
+build, but test/switch refuse them, including GPU requests whose implicit
+driver/kernel effects the lexical reader cannot prove safe. Bootloader changes
+are R4 and refuse earlier. Hand the appropriate
 boot/reboot instructions to a human instead of pretending a live test covers them.
 
 ## Rule seven: ground the model in real options

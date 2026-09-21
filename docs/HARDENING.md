@@ -111,7 +111,8 @@ enable switches for bash, zsh, fish, vim, neovim, git, tmux and htop. The docume
 PostgreSQL example is R2 only with explicit `enableTCPIP = false` and supported
 literal settings; PostgreSQL backup enable/scheduling is R2. Other static service
 settings are at least R3 when exposure is not established. Executable service
-hooks, systemd definitions, imports, functions, interpolation, dynamic attributes
+hooks and static command options such as `networking.firewall.extraCommands`,
+systemd definitions, imports, functions, interpolation, dynamic attributes
 and unrecognized option families require human review.
 
 The minimum prefix floors are R3 for networking, SSH, kernel and hardware; R4 for
@@ -123,8 +124,10 @@ these lexical rules proves that an accepted package or inherited setting is safe
 R4/unsupported proposals return refusal status 4 and print module paths and
 human review/build instructions without staging, changing HEAD/result/state,
 building or activating. Other errors return nonzero with their failing step.
-Kernel/initrd changes can build, but `test`/`switch` refuse: a human must review
-the appropriate `boot` and reboot procedure. There is deliberately no agent
+Kernel/initrd and **all `hardware.*` changes** can build, but `test`/`switch`
+refuse: a human must review the appropriate `boot` and reboot procedure. Hardware
+options can imply kernel/driver changes that this lexical reader cannot prove
+safe for a live test, including GPU requests. There is deliberately no agent
 `boot` verb.
 
 ## Exact candidate and commits
@@ -208,7 +211,10 @@ do not wait for a nonexistent timer. Use the helper's exact captured
 root-console recovery commands, then the same cleanup/build comparison. The
 agent is not authorized to run those console commands. Partial activation,
 commit failures and missing completion receipts are errors, not successful
-transactions; inspect `aether-status` and the journal before proceeding.
+transactions; inspect `aether-status` and the journal before proceeding. A commit
+that already succeeded is not rolled back merely because cleanup failed: the
+next invocation verifies its HEAD/running/profile state, finishes cleanup and
+asks you to rerun the requested action.
 
 Never delete all of `/run/aether`, reset Git, or remove unrelated proposal files
 to bypass a pending gate. Root administrators should not concurrently modify
