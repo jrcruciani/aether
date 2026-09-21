@@ -105,6 +105,11 @@ worked examples, a NixOS module packaging `aether-apply`, human-only
 What does not exist: an LLM conversation frontend, a semantic Nix security sandbox,
 a broad system test suite or multi-host apply support.
 
+[Execution modes](docs/MODES.md) distinguishes today's on-box agent (Mode A) from
+a workstation/separate-VM agent (Mode B). External proposals need a human handoff
+to the guarded target workflow; raw remote deployment is a separate human-only
+procedure, not an agent privilege or a remote feature of `aether-apply`.
+
 ## Why bother
 
 Handing an LLM a shell on a running server is a bad idea and most "AI sysadmin"
