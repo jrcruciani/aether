@@ -19,6 +19,7 @@ let
     environment.systemPackages = [ pkgs.ripgrep pkgs.fd ];
     networking.firewall.allowedTCPPorts = [ 8443 ];
   });
+  networkOnly = evaluate { networking.firewall.allowedTCPPorts = [ 8443 ]; };
   fixture = pkgs.writeText "fixture-flake.nix" ''
     {
       inputs.nixpkgs.url = "path:${pkgs.path}";
@@ -49,7 +50,7 @@ in
   name = "aether-apply";
   nodes.machine = {
     imports = [ ./apply-host.nix ];
-    virtualisation.additionalPaths = [ pkgs.path aetherSource base tools network ];
+    virtualisation.additionalPaths = [ pkgs.path aetherSource base tools network networkOnly ];
   };
   testScript = ''
     import json
@@ -79,6 +80,9 @@ in
 
     def head():
         return machine.succeed(f"git -C {repo} rev-parse HEAD").strip()
+
+    def pending():
+        return json.loads(machine.succeed("cat /var/lib/aether/pending.json"))
 
     def running():
         return machine.succeed("readlink -f /run/current-system").strip()
@@ -144,6 +148,9 @@ in
         agent("printf bad > " + proposals + "/default.nix", fail=True)
         agent(f"sudo -n NIX_REMOTE=ssh://invalid {apply} build", fail=True)
         run("build")
+        run("build", risk="R3")
+        error = run("switch", fail=True)
+        assert "R3 switch requires" in error, error
         agent(f"sudo -n {apply} build --host not-the-flake-key", fail=True)
 
     with subtest("R4 and unsupported forms do not mutate transaction or Git"):
@@ -211,6 +218,15 @@ in
         human_confirm()
         machine.fail(f"systemctl is-active --quiet {timer}")
         machine.fail("test -e /run/aether/rollback-target")
+        token = "/run/aether/confirmed-" + pending()["module_hash"]
+        original = machine.succeed("cat " + token)
+        foreign = json.loads(original)
+        foreign["id"] = "a-different-transaction"
+        machine.succeed("printf %s " + shlex.quote(json.dumps(foreign)) + " > " + token)
+        run("switch", fail=True)
+        assert head() == before
+        machine.succeed(f"test \"$(readlink -f {profile})\" = {good}")
+        machine.succeed("printf %s " + shlex.quote(original) + " > " + token)
         run("switch")
         assert running() == candidate
         assert head() != before
@@ -232,6 +248,26 @@ in
         assert "confirmation revoked" in error, error
         machine.succeed("test -z \"$(find /run/aether -name 'confirmed-*' -print)\"")
         machine.succeed(f"nix-env --profile {profile} --set {good} && {good}/bin/switch-to-configuration switch")
+        clean_failed()
+
+    with subtest("failed disarm cannot create human approval"):
+        before = head()
+        propose(firewall_file, ${builtins.toJSON firewall})
+        run("test")
+        machine.succeed(
+            "mkdir -p /run/systemd/system/deadman-rollback.timer.d && "
+            "printf '[Unit]\\nRefuseManualStop=yes\\n' "
+            "> /run/systemd/system/deadman-rollback.timer.d/refuse.conf && systemctl daemon-reload"
+        )
+        human_confirm(fail=True)
+        machine.succeed("test -z \"$(find /run/aether -name 'confirmed-*' -print)\"")
+        run("switch", fail=True)
+        assert head() == before
+        machine.succeed(
+            "rm /run/systemd/system/deadman-rollback.timer.d/refuse.conf && "
+            "rmdir /run/systemd/system/deadman-rollback.timer.d && systemctl daemon-reload"
+        )
+        wait_for_recovery(good)
         clean_failed()
 
     with subtest("real arm failure cannot activate or commit"):
@@ -279,6 +315,15 @@ in
         clean_failed()
 
     with subtest("reboot destroys approval, preserves recovery gate and checks equality"):
+        # Direct-boot tests reboot their original init, not a bootloader generation.
+        # Make the captured baseline exactly that original fixture for this case.
+        machine.succeed(
+            f"git -C {repo} rm hosts/fixture/modules/agent/tools.nix && "
+            f"git -C {repo} commit -m 'Return fixture to its direct-boot baseline' && "
+            f"nix-env --profile {profile} --set {fixture_base} && "
+            f"{fixture_base}/bin/switch-to-configuration switch"
+        )
+        good = fixture_base
         before = head()
         propose(firewall_file, ${builtins.toJSON firewall})
         run("test")

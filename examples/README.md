@@ -15,8 +15,10 @@ hosts/vps/
 ```
 
 The shape that matters is `modules/agent/`. One file per request, dated, imported
-from `default.nix`. That is what makes a change reviewable at a glance and reversible
-with `rm`.
+automatically in sorted order by the human-owned `default.nix`. Do not edit the
+loader when adding a proposal. A root-owned sticky directory protects it from
+unlink/replacement while allowing the agent to create its own `.nix` files.
+Follow [HARDENING.md](../docs/HARDENING.md) before enabling apply for an account.
 
 Two things about wiring it up, both of which fail quietly rather than loudly:
 
@@ -58,7 +60,19 @@ with `--no-update-lock-file`. The JSON is at
 Regenerate after lock or module changes. The helper accepts an absolute local
 flake directory (including spaces) and a host key made of letters, digits,
 underscores or hyphens. It refuses a missing lock and never guesses the hostname.
-Existing timer-only installs can leave `host` unset; only `aether-index` fails.
+Existing timer-only installs can leave `host` unset; index/apply report setup
+errors instead of guessing.
+
+For apply, additionally configure `services.aether.agentUser`, the protected
+checkout and separate agent/human sudo grants described in the hardening guide.
+The example intentionally does not grant a root-capable account to an agent.
+Enabling the module does not provision those permissions for you.
+
+The R1 ripgrep/fd example goes through `sudo aether-apply build --risk R1`, review
+of the closure diff, then `sudo aether-apply switch --risk R1`. The helper stages,
+activates the exact build and commits only after success. R3 instead uses test,
+a different human's `sudo aether-confirm`, then switch. Never grant the agent
+direct rebuild, activation, confirm or disarm sudo access.
 
 On the tested NixOS 25.05 and 25.11 pins, both `documentation.enable` and
 `documentation.nixos.enable` must be true for this build attribute to exist.

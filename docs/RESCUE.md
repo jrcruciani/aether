@@ -39,7 +39,7 @@ anything drastic.
 
 ### 2. Reboot from the provider console
 
-`nixos-rebuild test` does not write the boot default. If the breaking change was
+`aether-apply test` does not write the boot default. If the breaking change was
 applied with `test`, a plain reboot returns you to the last good generation. Use the
 console's power controls, or type `reboot` if you have console login.
 
@@ -88,13 +88,14 @@ Only after the timer has fired and rollback has completed, or the machine has
 rebooted into the previous generation, recover the repo. An inactive timer alone
 does not prove rollback completed. Do not disarm early to enter this branch.
 
-At the console, change to your configuration repo (`cd /etc/nixos` for the usual
-layout). Inspect `git status --short` and identify the exact module from the failed
+At the console, or from the recovered restricted account, change to your
+configuration repo (`cd /etc/nixos` for the usual layout). Inspect the source and
+`sudo aether-status` and identify the exact module from the failed
 request. Replace `<host>` and `YYYY-MM-DD-topic.nix` below with that host and file,
 not a wildcard. Do not clean unrelated dirty files. If other requests or unexplained
 changes are present, stop and tell the human before staging anything.
 
-`aether-status` must succeed and print an exact `not armed` line before removing the
+`sudo aether-status` must succeed and print an exact `not armed` line before removing the
 file; it may also print a rollback-target line. Its exit code alone is not a check:
 it can succeed while printing `ARMED`. The block checks for the exact line and stops
 on command errors, including a failed status check, build or unreadable system path.
@@ -102,7 +103,7 @@ on command errors, including a failed status check, build or unreadable system p
 ```bash
 (
   set -e
-  status=$(aether-status)
+  status=$(sudo aether-status)
   printf '%s\n' "$status"
   if ! printf '%s\n' "$status" | grep -Fxq 'not armed'; then
     printf '%s\n' 'stop: expected not armed; tell the human' >&2
@@ -110,16 +111,7 @@ on command errors, including a failed status check, build or unreadable system p
   fi
 
   rm -- hosts/<host>/modules/agent/YYYY-MM-DD-topic.nix
-  git add -A
-  nixos-rebuild build --flake .#<host>
-  built=$(readlink -f ./result)
-  running=$(readlink -f /run/current-system)
-  if [ "$built" = "$running" ]; then
-    printf '%s\n' 'repo matches running system'
-  else
-    printf '%s\n' 'repo and running system DIVERGE' >&2
-    exit 1
-  fi
+  sudo aether-apply build
 )
 ```
 
@@ -128,6 +120,22 @@ paths differ, say `repo and running system DIVERGE`. Neither failure permits a
 follow-on commit or activation. Do not switch to make the paths agree. The repo must
 build to exactly the running system before any further change. A match completes
 recovery, not approval to retry; the agent never confirms on the human's behalf.
+
+The helper's pending marker survives reboot only to enforce this fresh-build
+comparison. It does not preserve human approval. A successful build prints
+`repo matches running system` only if the paths are equal; a mismatch prints
+`repo and running system DIVERGE`. Do not remove state files to bypass that gate.
+
+If human confirmation already disarmed the timer before a later edit or abort,
+there may be no timer left to wait for. Use the exact root-console recovery
+commands printed by the helper, targeting its captured known-good store path,
+then perform the same module cleanup/build comparison. The restricted agent
+cannot run those console commands. `aether-disarm` alone is not confirmation,
+and only a different authorized human may run `aether-confirm`.
+
+The raw recovery commands earlier in this runbook are **human console
+procedures**, not extra agent sudo grants. See [HARDENING.md](HARDENING.md) for
+the account and permission boundary.
 
 ## Things that will not save you
 
