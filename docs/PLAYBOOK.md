@@ -140,6 +140,15 @@ systemd-run --scope --collect --unit=rb-$(date +%s) \
 ```
 
 `aether-arm` comes from `services.aether.enable`, the module in `modules/deadman.nix`.
+Arm while the known-good system is still running. It records that system's store
+path in `/run/aether/rollback-target`; `aether-status` shows the pin and time left.
+When the timer fires, it sets the system profile to the pin and activates it,
+without rebuilding or evaluating a flake. `test` leaves the profile unchanged, so
+rolling it back one generation would go too far. A missing or invalid pin produces
+a journal warning and falls back to the current boot-default profile, not an older
+generation. A profile-update failure is reported but does not prevent an attempt
+to activate the recovery system. Disarming removes the pin.
+
 Earlier versions of this playbook told you to arm the timer with a `systemd-run` line
 calling `nixos-rebuild switch --rollback`. Do not do that. It re-evaluates the flake
 and derives the configuration name from the hostname, so unless those two names
