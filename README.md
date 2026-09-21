@@ -79,14 +79,28 @@ you ask for something in plain language
   -> agent writes ONE isolated module into modules/agent/
   -> git add, nix flake check, nixos-rebuild build
   -> nothing has touched the running system yet
-  -> for risky changes: arm a rollback timer, then nixos-rebuild test
-  -> you confirm from a second SSH session that you are still alive
-  -> disarm the timer, commit, nixos-rebuild switch
+  -> R1/R2: after a successful build, review the diff, commit, nixos-rebuild switch
+  -> R3: arm a rollback timer, then nixos-rebuild test; no commit yet
+  -> R3: stop and wait for your explicit second-SSH-session confirmation
+  -> R3: only after aether-disarm succeeds, commit, nixos-rebuild switch
 ```
 
 Your `configuration.nix` is read for context and never rewritten. Each change is one
 small file with a date in its name. Reverting is deleting a file. If the build
 fails, the generated module is removed rather than left half-applied.
+
+If the second session fails, stop and let the timer fire or reboot into the previous
+generation. Only once rollback has completed, check `aether-status`: it must succeed
+and print an exact `not armed` line, even if it also prints the rollback target.
+From the repo root, remove exactly the failed
+request's `hosts/<host>/modules/agent/YYYY-MM-DD-topic.nix`, run `git add -A` and
+`nixos-rebuild build --flake .#<host>`, then compare `readlink -f ./result` with
+`readlink -f /run/current-system`. Report `repo matches running system` only if they
+are equal; otherwise report `repo and running system DIVERGE` and stop. A failed
+build also means stop and show the error, with no follow-on commit or activation.
+Do not clean unrelated dirty files or stage another request's changes. The
+[post-rollback checklist](docs/RESCUE.md#post-rollback-checklist-for-a-failed-r3-test)
+has the guarded console commands. A match completes recovery, not approval to retry.
 
 ## Risk levels
 
@@ -112,10 +126,11 @@ anything that touches the network, arm it:
 aether-arm 10min
 ```
 
-Then apply the change. If you can still log in, `aether-disarm`. If you cannot, the
-machine reverts itself in ten minutes without you finding the console password you
-wrote down eighteen months ago. It removes most of the fear from remote firewall
-edits.
+Then apply with `nixos-rebuild test`. If you explicitly confirm you can still log in
+from a second SSH session, run `aether-disarm`; only if it succeeds, commit and
+switch. The agent cannot confirm for you. If you cannot log in, let the timer fire.
+It restores the running system, not the repo: the failed module must still be
+removed and the repository-build comparison above must pass before another change.
 
 It used to be a `systemd-run` line in this README that you were expected to paste
 correctly from memory, in the one situation where you are least calm. Now it is a
