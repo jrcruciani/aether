@@ -255,6 +255,8 @@ in
         ).split("-- cursor: ", 1)[1].strip()
         armed = standalone.succeed("env -i PATH=/missing /run/current-system/sw/bin/aether-arm")
         assert "rolls back in 20s" in armed, armed
+        assert "fresh session, run: aether-disarm" in armed, armed
+        assert "aether-confirm" not in armed, armed
         standalone.succeed(f"test \"$(cat {pin})\" = {standalone_base}")
         standalone.succeed(f"{standalone_broken}/bin/switch-to-configuration test")
         standalone.fail("systemctl is-active --quiet sshd.service")

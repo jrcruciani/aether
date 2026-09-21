@@ -32,12 +32,13 @@ apply pipeline. The following is a **human-operated** firewall test, using your
 own administrative access and configuration key:
 
 ```bash
-sudo aether-arm 10min
 # Test the firewall configuration you have reviewed; replace <host>.
-sudo nixos-rebuild test --flake /etc/nixos#<host>
+sudo aether-arm 10min &&
+  sudo systemd-run --scope --collect nixos-rebuild test --flake /etc/nixos#<host>
 ```
 
-Keep that SSH session open. Open a fresh second SSH session, check that you can
+The `&&` refuses activation if arming fails; the scope keeps activation outside
+the SSH session's cgroup. Keep that SSH session open. Open a fresh second SSH session, check that you can
 still log in and that the intended firewall behavior works, then run
 `sudo aether-disarm` there. If access fails, leave the timer alone: it restores
 the system that was running when you armed it. The rescue console is still your

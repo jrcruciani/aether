@@ -130,9 +130,11 @@ let
       echo "aether: armed. The system rolls back in $timeout unless disarmed."
       echo "aether: open a SECOND ssh session and confirm you can still log in,"
       echo "aether: keeping this one open."
-      ${lib.optionalString withApply ''
+      ${if withApply then ''
         echo "aether: for an apply transaction, a DIFFERENT human runs aether-confirm."
         echo "aether: aether-disarm alone is a manual timer operation, not candidate confirmation."
+      '' else ''
+        echo "aether: after checking access in that fresh session, run: aether-disarm"
       ''}
     '';
   };
