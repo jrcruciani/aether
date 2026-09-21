@@ -120,7 +120,7 @@ in
     machine.wait_for_unit("sshd.service")
     assert running() == fixture_base
     machine.succeed(
-        "ssh-keygen -q -t ed25519 -N '' -f /root/human-key && "
+        "ssh-keygen -q -t ed25519 -N \"\" -f /root/human-key && "
         "install -d -m 700 -o human -g users /home/human/.ssh && "
         "install -m 600 -o human -g users /root/human-key.pub /home/human/.ssh/authorized_keys"
     )

@@ -610,9 +610,26 @@ def unchanged(config, candidate):
 
 
 def frozen_candidate(config, repo, proposals, view, risk, caller):
-    identity = uuid.uuid4().hex
-    folder = STATE / "candidates" / identity
+    prior_index = git_text(config, repo, "write-tree")
+    folder = STATE / "candidates" / uuid.uuid4().hex
     folder.mkdir(mode=0o700)
+    staging = {}
+    try:
+        return build_snapshot(config, repo, proposals, view, risk, caller, folder, staging)
+    except (Error, OSError, ValueError):
+        if staging:
+            if (git_text(config, repo, "write-tree") != staging["tree"] or
+                    git_text(config, repo, "rev-parse", "HEAD") != view["head"]):
+                print("aether: ERROR: Git changed concurrently; refusing to overwrite its staging",
+                      file=sys.stderr)
+            else:
+                git(config, repo, "read-tree", prior_index)
+        shutil.rmtree(folder)
+        raise
+
+
+def build_snapshot(config, repo, proposals, view, risk, caller, folder, staging):
+    identity = folder.name
     source = folder / "source"
     git(config, repo, "clone", "--quiet", "--no-hardlinks", "--no-checkout", str(repo), str(source))
     git(config, source, "checkout", "--quiet", "--detach", view["head"])
@@ -638,6 +655,7 @@ def frozen_candidate(config, repo, proposals, view, risk, caller):
     if not unchanged(config, candidate):
         raise Error("source changed while freezing the candidate; nothing will be activated")
     transfer_tree(config, source, repo, tree)
+    staging["tree"] = tree
     print(f"aether: frozen candidate {identity}; checking and building its exact tree", flush=True)
     command(config, [config["nix"], "flake", "check", "--no-update-lock-file",
                      "--no-write-lock-file", str(source)], cwd=source)
@@ -804,6 +822,10 @@ def apply(config, arguments):
         if previous and previous["boot"] == boot_id() and unchanged(config, previous):
             candidate = previous
             candidate["risk"] = max(candidate["risk"], risk.level)
+            for reason in risk.reasons:
+                if reason not in candidate["reasons"]:
+                    candidate["reasons"].append(reason)
+            save_candidate(candidate, pending=pending is not None)
             show_risk(Risk(candidate["risk"], candidate["reasons"], candidate["boot_only"]))
             print(candidate["diff"], end="" if candidate["diff"].endswith("\n") else "\n")
         else:
