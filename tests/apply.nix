@@ -1,58 +1,33 @@
 { hostPkgs, lib, ... }:
 let
   pkgs = hostPkgs;
-  nixosLib = import (pkgs.path + "/nixos/lib") { };
   aetherSource = lib.cleanSource ../.;
-  packages = "{ pkgs, ... }: { environment.systemPackages = with pkgs; [ ripgrep fd ]; }";
-  firewall = "{ networking.firewall.allowedTCPPorts = [ 8443 ]; }";
-  evaluateConfig = extra: (nixosLib.evalTest {
-    hostPkgs = pkgs;
+  packages = builtins.readFile ./fixtures/apply/hosts/fixture/modules/agent/tools.nix;
+  firewall = builtins.readFile ./fixtures/apply/hosts/fixture/modules/agent/firewall.nix;
+  fixtureFor = names: builtins.path {
+    path = ./fixtures/apply;
     name = "aether-apply-fixture";
-    nodes.machine.imports = [ ./apply-host.nix extra ];
-    testScript = "";
-  }).config.nodes.machine;
-  evaluate = extra: (evaluateConfig extra).system.build.toplevel;
-  base = evaluate { };
-  toolsConfig = evaluateConfig ({ pkgs, ... }: {
-    environment.systemPackages = [ pkgs.ripgrep pkgs.fd ];
-  });
+    filter = path: _:
+      let name = baseNameOf path;
+      in !(builtins.elem name [ "tools.nix" "firewall.nix" ]) || builtins.elem name names;
+  };
+  evaluateConfig = names:
+    ((import ((fixtureFor names) + "/flake.nix")).outputs {
+      nixpkgs = pkgs.path;
+      aether = aetherSource;
+    }).nixosConfigurations.fixture.config;
+  base = (evaluateConfig [ ]).system.build.toplevel;
+  toolsConfig = evaluateConfig [ "tools.nix" ];
   tools = toolsConfig.system.build.toplevel;
-  network = evaluate ({ pkgs, ... }: {
-    environment.systemPackages = [ pkgs.ripgrep pkgs.fd ];
-    networking.firewall.allowedTCPPorts = [ 8443 ];
-  });
-  networkOnly = evaluate { networking.firewall.allowedTCPPorts = [ 8443 ]; };
-  fixture = pkgs.writeText "fixture-flake.nix" ''
-    {
-      inputs.nixpkgs.url = "path:${pkgs.path}";
-      inputs.aether.url = "path:${aetherSource}";
-      inputs.aether.inputs.nixpkgs-test.follows = "nixpkgs";
-      outputs = { nixpkgs, aether, ... }:
-        let
-          pkgs = import nixpkgs { system = "x86_64-linux"; };
-          evaluation = (import (nixpkgs + "/nixos/lib") {}).evalTest {
-            hostPkgs = pkgs;
-            name = "aether-apply-fixture";
-            nodes.machine.imports = [
-              (aether + "/tests/apply-host.nix")
-              ./hosts/fixture/modules/agent
-            ];
-            testScript = "";
-          };
-        in {
-          nixosConfigurations.fixture = {
-            config = evaluation.config.nodes.machine;
-            inherit pkgs;
-          };
-        };
-    }
-  '';
+  network = (evaluateConfig [ "firewall.nix" "tools.nix" ]).system.build.toplevel;
+  networkOnly = (evaluateConfig [ "firewall.nix" ]).system.build.toplevel;
+  fixture = fixtureFor [ ];
 in
 {
   name = "aether-apply";
   globalTimeout = 1800;
   nodes.machine = {
-    imports = [ ./apply-host.nix ];
+    imports = [ ./apply-host.nix (fixture + "/hosts/fixture/modules/agent") ];
     virtualisation.additionalPaths = [ pkgs.path aetherSource pkgs.e2fsprogs base tools network networkOnly ];
   };
   testScript = ''
@@ -108,14 +83,12 @@ in
         machine.fail("test -e /var/lib/aether/pending.json")
 
     machine.succeed(
-        f"mkdir -p {proposals} && "
-        f"cp ${fixture} {repo}/flake.nix && "
-        f"cp ${../examples/hosts/vps/modules/agent/default.nix} {proposals}/default.nix && "
-        f"printf 'result\\n' > {repo}/.gitignore && "
+        f"mkdir -p {repo} && cp -R ${fixture}/. {repo}/ && chmod -R u+w {repo} && "
         f"chown root:agent {proposals} && chmod 1775 {proposals} && "
         f"git -C {repo} init && git -C {repo} config user.name Fixture && "
         f"git -C {repo} config user.email fixture@localhost && "
-        f"git -C {repo} add -A && nix flake lock {repo} && "
+        f"git -C {repo} add -A && nix flake lock {repo} "
+        "--override-input nixpkgs path:${pkgs.path} --override-input aether path:${aetherSource} && "
         f"git -C {repo} add -A && git -C {repo} commit -m baseline"
     )
     # Bootstrap the actual fixture baseline; subsequent builds must reproduce it.
@@ -216,16 +189,7 @@ in
         actual_drv = machine.succeed(
             f"nix eval --raw --no-update-lock-file {repo}#nixosConfigurations.fixture.config.system.build.toplevel.drvPath"
         ).strip()
-        if actual_drv != "${tools.drvPath}":
-            print(machine.succeed(
-                "python3 -c " + shlex.quote(
-                    "import pathlib,re; "
-                    "paths=lambda p:set(re.findall(r'/nix/store/[^\"\\s]+',pathlib.Path(p).read_text())); "
-                    f"a=paths('${tools.drvPath}');b=paths('{actual_drv}'); "
-                    "print('preloaded-only:',sorted(a-b)); print('actual-only:',sorted(b-a))"
-                )
-            ))
-            raise AssertionError(f"fixture preload differs: ${tools.drvPath} != {actual_drv}")
+        assert actual_drv == "${tools.drvPath}", f"fixture preload differs: ${tools.drvPath} != {actual_drv}"
         output = run("build")
         assert "effective risk R1" in output, output
         candidate = machine.succeed("readlink -f /etc/nixos/result").strip()

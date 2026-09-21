@@ -108,6 +108,7 @@ class Policy(unittest.TestCase):
 
     def test_loader_matches_installed_example_exactly(self):
         self.assertEqual(apply.LOADER, (ROOT / "examples/hosts/vps/modules/agent/default.nix").read_text())
+        self.assertEqual(apply.LOADER, (ROOT / "tests/fixtures/apply/hosts/fixture/modules/agent/default.nix").read_text())
 
     def test_token_binds_candidate_context(self):
         candidate = dict(id="nonce", module_hash="hash", tree="tree", system="system",
