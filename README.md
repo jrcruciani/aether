@@ -51,9 +51,9 @@ It has not been through a hundred hostile configurations. If you point it at
 something you care about without reading it first, that is on you.
 
 What exists today: the safety protocol, the system prompt, the rescue runbook,
-worked examples, a NixOS module packaging the rollback timer, and a small Linux VM
-check for recovery after a test activation. What does not exist: an agent CLI,
-a broad test suite, multi-host support.
+worked examples, a NixOS module packaging the rollback timer, and a Linux VM
+regression suite for recovery, disarming and competing arms. What does not exist:
+an agent CLI, a broad system test suite, multi-host support.
 
 ## Why bother
 
@@ -171,12 +171,19 @@ Full story in
 including the second attempt, which rolled back the profile and then died before
 activating it.
 
-The regression check lives in `tests/rollback.nix`. On x86_64 Linux with KVM, run
-`nix flake check --print-build-logs`; GitHub Actions runs the same check in a
-disposable NixOS VM. It test-activates a prebuilt specialisation that stops sshd,
-then waits for real timer recovery, both with the pin and after deleting it. The
-locked `nixpkgs-test` input is only for this check. Importing the module still uses
-your own `pkgs`.
+The regression suite lives in `tests/rollback.nix`, exposed once as
+`checks.x86_64-linux.deadman`. On x86_64 Linux with KVM, run
+`nix flake check --no-update-lock-file --print-build-logs`; GitHub Actions runs the
+same locked check in a disposable NixOS VM. It test-activates a prebuilt
+specialisation that stops sshd, then waits for real timer recovery of the running
+path, system profile and SSH. It checks that the pin wins even when the boot
+default has moved, and that missing or invalid pins warn and fall back. Separate
+subtests outwait a disarmed timer, reject a second arm, and race two arms without
+losing the pin. Journal checks use a fresh cursor for each recovery and disarm
+scenario, and finished transient units must disappear, not just become inactive.
+This is a direct-boot VM check, not a bootloader test or permission to try the timer
+on a live host. The locked `nixpkgs-test` input is only for this check. Importing
+the module still uses your own `pkgs`.
 
 ## Getting started
 

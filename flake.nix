@@ -9,7 +9,7 @@
     nixosModules.aether = import ./modules/deadman.nix;
     nixosModules.default = self.nixosModules.aether;
 
-    checks.x86_64-linux.rollback =
+    checks.x86_64-linux.deadman =
       nixpkgs-test.legacyPackages.x86_64-linux.testers.runNixOSTest
         (import ./tests/rollback.nix);
   };

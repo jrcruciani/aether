@@ -1,4 +1,4 @@
-name: Rollback VM
+name: Deadman VM
 
 on:
   pull_request:
@@ -9,7 +9,7 @@ permissions:
 
 jobs:
   rollback:
-    name: Pinned rollback (NixOS VM)
+    name: Deadman regression suite (NixOS VM)
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -17,5 +17,5 @@ jobs:
       - uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31.11.1
       - name: Check KVM
         run: test -r /dev/kvm && test -w /dev/kvm
-      - name: Run rollback VM
+      - name: Run deadman VM
         run: nix flake check --no-update-lock-file --print-build-logs

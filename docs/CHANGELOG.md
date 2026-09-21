@@ -31,3 +31,19 @@ Evidence: a manual walkthrough of the success and failure branches and a check o
 every `git commit` example in the prompt and playbook. Shell-gate checks cover both
 one-line status output and multiline output with the rollback target, plus rejection
 of armed or failed status checks. This is a documentation change, not a VM test.
+
+## 04: exercise the deadman in a disposable VM
+
+I extended the existing VM harness rather than adding a second build, and exposed
+it as `checks.x86_64-linux.deadman`. Recovery now has to restore the running path,
+profile and SSH even when the boot default differs from the pin; missing and
+invalid pins must warn before falling back. Separate subtests disarm and wait
+past the deadline plus systemd's timer accuracy, reject a second arm with its
+message, and keep the concurrent-arm pin check. Finished transient units must
+disappear, and fresh journal cursors stop an earlier rollback from contaminating
+the next scenario. The [Linux VM run](https://github.com/jrcruciani/aether/actions/runs/35611400808)
+passed all seven subtests with
+`nix flake check --no-update-lock-file --print-build-logs` against the locked
+NixOS 26.05 input, including the full 70-second disarm wait. The runtime helpers
+did not change. This is still a direct-boot KVM guest, not a bootloader test or a
+timer experiment on a live host.
