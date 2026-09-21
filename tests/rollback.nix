@@ -34,8 +34,10 @@
 
     with subtest("competing arm preserves the pin; disarm removes it"):
         machine.succeed(
-            "(aether-arm 5min; echo $? > /tmp/arm-a.status) & "
-            "(aether-arm 5min; echo $? > /tmp/arm-b.status) & wait"
+            "(if aether-arm 5min > /tmp/arm-a.log 2>&1; then echo 0; "
+            "else echo $?; fi) > /tmp/arm-a.status & "
+            "(if aether-arm 5min > /tmp/arm-b.log 2>&1; then echo 0; "
+            "else echo $?; fi) > /tmp/arm-b.status & wait"
         )
         results = sorted(
             machine.succeed(f"cat /tmp/arm-{name}.status").strip()
