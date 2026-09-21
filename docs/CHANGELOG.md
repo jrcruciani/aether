@@ -32,6 +32,30 @@ every `git commit` example in the prompt and playbook. Shell-gate checks cover b
 one-line status output and multiline output with the rollback target, plus rejection
 of armed or failed status checks. This is a documentation change, not a VM test.
 
+## 03: build the options index from the host's lock
+
+Rule seven was building from a channel, not the host's `flake.lock`, so its index
+could confidently describe the wrong options. `services.aether.enable` now also
+installs `aether-index`, with an explicit configuration key in `services.aether.host`
+and a local `services.aether.flake` directory, defaulting to `/etc/nixos`. It requires
+a lock, refuses to update it, and leaves the old symlink alone on build failure;
+timer-only installs still work without a host key. The README, playbook, prompt and
+examples agree on setup and the unchanged `share/doc/nixos/options.json` layout.
+The [Linux evidence run](https://github.com/jrcruciani/aether/actions/runs/35613584766)
+built that exact manual attribute from a disposable copy of the example host:
+22,116 options at NixOS 25.05 revision `ac62194c3917d5f474c1a844b6fd6da2db95077d`,
+then 23,290 after changing the same fixture lock to NixOS 25.11 revision
+`b6018f87da91d19d0ab4cf979885689b469cdd41`. The helper produced the same output as
+the direct build with an empty caller PATH, a space in the flake directory, and
+an OS hostname different from the configuration key. On both pins, disabling
+`documentation.nixos.enable` or `documentation.enable` removed `system.build.manual`;
+the failed helper preserved the old index. Disabling only `documentation.doc.enable`
+still built the JSON. Invalid inputs, missing locks and unknown hosts also failed
+without replacing it. All eight deadman VM subtests passed, including a timer-only
+install's missing-host error. The option counts come from the host pins, not the
+root test-only input; the disposable KVM guest still uses its own locked input.
+No timer was tested on a live host.
+
 ## 04: exercise the deadman in a disposable VM
 
 I extended the existing VM harness rather than adding a second build, and exposed
