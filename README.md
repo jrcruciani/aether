@@ -51,8 +51,9 @@ It has not been through a hundred hostile configurations. If you point it at
 something you care about without reading it first, that is on you.
 
 What exists today: the safety protocol, the system prompt, the rescue runbook,
-worked examples, and a NixOS module packaging the rollback timer. What does not
-exist: a CLI, a test suite, multi-host support.
+worked examples, a NixOS module packaging the rollback timer, and a small Linux VM
+check for recovery after a test activation. What does not exist: an agent CLI,
+a broad test suite, multi-host support.
 
 ## Why bother
 
@@ -136,6 +137,16 @@ NixOS module:
 That gives you `aether-arm`, `aether-disarm` and `aether-status`. Nothing runs in
 the background and nothing touches your configuration on its own.
 
+`aether-arm` saves the running system's store path in
+`/run/aether/rollback-target` before starting the timer. Recovery sets the system
+profile to that exact path, then activates it. It does not go back one generation:
+`nixos-rebuild test` leaves the profile alone, so that would skip the system I was
+trying to get back to. If the pin is missing or invalid, recovery warns in the
+journal and uses the current boot-default profile instead. It still attempts
+activation if updating the profile fails, but reports the failure rather than
+pretending the boot default is safe. `aether-status` shows the pin and the timer's
+time remaining; `aether-disarm` stops the timer and removes the pin.
+
 The line this README used to tell you to paste did not work. It called
 `nixos-rebuild switch --rollback`, which re-evaluates your flake and looks for a
 configuration named after the hostname, so it failed on the first live test and left
@@ -144,6 +155,13 @@ Full story in
 [docs/FIELD-NOTES-rollback-timer-2026-09.md](docs/FIELD-NOTES-rollback-timer-2026-09.md),
 including the second attempt, which rolled back the profile and then died before
 activating it.
+
+The regression check lives in `tests/rollback.nix`. On x86_64 Linux with KVM, run
+`nix flake check --print-build-logs`; GitHub Actions runs the same check in a
+disposable NixOS VM. It test-activates a prebuilt specialisation that stops sshd,
+then waits for real timer recovery, both with the pin and after deleting it. The
+locked `nixpkgs-test` input is only for this check. Importing the module still uses
+your own `pkgs`.
 
 ## Getting started
 

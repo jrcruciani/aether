@@ -6,40 +6,68 @@
 # about to change the firewall on a box you can only reach through that
 # firewall.
 #
-# This turns it into two commands that are part of the system, and into a
-# timeout you declare once in your config instead of retyping under pressure.
+# Arm before activation: it pins the running system, not the generation before
+# the boot default. A `test` activation leaves that default alone, so stepping
+# back one generation would recover the wrong system.
 
 { config, lib, pkgs, ... }:
 
 let
   cfg = config.services.aether;
 
-  # Rolls back without evaluating anything. `nixos-rebuild switch --rollback`
-  # re-evaluates the flake and derives the configuration name from the
-  # hostname, which fails whenever your configuration is named something else.
-  # Discovered the hard way: the timer fired, the rollback errored out, and
-  # the system stayed exactly where it was. A deadman switch that fails when
-  # it fires is worse than none, because you were counting on it.
+  validateTarget = ''
+    valid_target() {
+      [[ "$1" =~ ^/nix/store/[^/[:space:]]+$ ]] &&
+        [[ -d "$1" && -x "$1/bin/switch-to-configuration" ]] &&
+        [[ "$(readlink -f -- "$1")" == "$1" ]]
+    }
+  '';
+
+  # Recovery only uses a system already built on disk. No rebuild or flake
+  # evaluation belongs in the path that runs after we have lost SSH.
   rollbackScript = pkgs.writeShellApplication {
     name = "aether-rollback";
-    runtimeInputs = [ pkgs.nix pkgs.systemd pkgs.coreutils ];
+    runtimeInputs = [ pkgs.nix pkgs.coreutils ];
     text = ''
       profile=/nix/var/nix/profiles/system
+      pin=/run/aether/rollback-target
+      ${validateTarget}
 
-      nix-env --profile "$profile" --rollback
+      target=
+      if [[ ! -f "$pin" ]] || ! target=$(cat "$pin") || ! valid_target "$target"; then
+        echo "aether: WARNING: missing or invalid rollback target in $pin; falling back to boot-default profile $profile." >&2
+        if ! target=$(readlink -f "$profile") || ! valid_target "$target"; then
+          echo "aether: ERROR: boot-default profile is not an activatable system; cannot recover." >&2
+          exit 1
+        fi
+      fi
 
-      target=$(readlink -f "$profile")
       echo "aether: rolling back to $target"
+      profile_status=0
+      nix-env --profile "$profile" --set "$target" || {
+        profile_status=$?
+        echo "aether: ERROR: failed to set system profile to $target; attempting recovery activation anyway." >&2
+      }
 
-      "$target"/bin/switch-to-configuration switch
+      if ! "$target"/bin/switch-to-configuration switch; then
+        echo "aether: ERROR: recovery activation of $target failed; inspect the journal and use the rescue console." >&2
+        exit 1
+      fi
+
+      if (( profile_status != 0 )); then
+        echo "aether: ERROR: recovery activation finished, but the system profile update failed; check the boot default." >&2
+      fi
+      exit "$profile_status"
     '';
   };
 
   arm = pkgs.writeShellApplication {
     name = "aether-arm";
-    runtimeInputs = [ pkgs.systemd ];
+    runtimeInputs = [ pkgs.systemd pkgs.coreutils ];
     text = ''
       timeout="''${1:-${cfg.rollbackTimeout}}"
+      pin=/run/aether/rollback-target
+      ${validateTarget}
 
       if systemctl is-active --quiet ${cfg.unitName}.timer; then
         echo "aether: ${cfg.unitName}.timer is already armed." >&2
@@ -47,12 +75,28 @@ let
         exit 1
       fi
 
-      systemd-run \
+      if ! target=$(readlink -f /run/current-system) || ! valid_target "$target"; then
+        echo "aether: ERROR: /run/current-system is not an activatable system; timer not armed." >&2
+        exit 1
+      fi
+
+      install -d -m 0700 /run/aether
+      pending_pin=$(mktemp /run/aether/rollback-target.XXXXXX)
+      trap 'rm -f "$pending_pin"' EXIT
+      printf '%s\n' "$target" > "$pending_pin"
+      mv -f "$pending_pin" "$pin"
+
+      if ! systemd-run \
         --collect \
         --unit=${cfg.unitName} \
         --on-active="$timeout" \
-        ${cfg.rollbackCommand}
+        ${cfg.rollbackCommand}; then
+        rm -f "$pin"
+        echo "aether: ERROR: could not arm the rollback timer; pin removed. Do not activate the change." >&2
+        exit 1
+      fi
 
+      echo "aether: pinned $target"
       echo "aether: armed. The system rolls back in $timeout unless disarmed."
       echo "aether: open a SECOND ssh session and confirm you can still log in,"
       echo "aether: keeping this one open. Then run: aether-disarm"
@@ -61,7 +105,7 @@ let
 
   disarm = pkgs.writeShellApplication {
     name = "aether-disarm";
-    runtimeInputs = [ pkgs.systemd ];
+    runtimeInputs = [ pkgs.systemd pkgs.coreutils ];
     text = ''
       if ! systemctl is-active --quiet ${cfg.unitName}.timer; then
         echo "aether: nothing armed." >&2
@@ -69,14 +113,22 @@ let
       fi
 
       systemctl stop ${cfg.unitName}.timer
+      rm -f /run/aether/rollback-target
       echo "aether: disarmed. The change is yours to keep."
     '';
   };
 
   status = pkgs.writeShellApplication {
     name = "aether-status";
-    runtimeInputs = [ pkgs.systemd ];
+    runtimeInputs = [ pkgs.systemd pkgs.coreutils ];
     text = ''
+      if [[ -f /run/aether/rollback-target ]]; then
+        printf 'rollback target: '
+        cat /run/aether/rollback-target
+      else
+        echo "rollback target: not pinned"
+      fi
+
       if systemctl is-active --quiet ${cfg.unitName}.timer; then
         echo "ARMED"
         systemctl list-timers --all '${cfg.unitName}.timer' --no-pager
@@ -121,18 +173,21 @@ in
       type = lib.types.str;
       default = "${rollbackScript}/bin/aether-rollback";
       description = ''
-        What the timer runs when it fires. The default rolls the system
-        profile back one generation and activates it directly, without
-        evaluating your flake.
+        What the timer runs when it fires. Before activation, aether-arm
+        records the running system in /run/aether/rollback-target. The
+        default sets the system profile to that pinned path and activates
+        it directly, without rebuilding or evaluating your flake. A test
+        activation leaves the profile unchanged, so going back one
+        generation would skip the system you meant to recover.
 
-        That last part is not a detail. `nixos-rebuild switch --rollback`
-        looks like the obvious command and it is a trap: it re-evaluates the
-        flake and looks for a configuration named after the machine's
-        hostname. If your configuration is named anything else, which is
-        normal, the rollback fails at the exact moment you need it, and it
-        fails on a box you have just locked yourself out of. Activating a
-        generation that is already built on disk has nothing left to
-        evaluate and nothing left to get wrong.
+        If the pin is missing or invalid, it warns and activates the
+        current boot-default profile instead. It never steps back a
+        generation. A failed profile update is reported, but does not
+        prevent an attempt to activate the recovery system. The service
+        still fails so that a boot-default problem is not hidden.
+
+        An override replaces this recovery behavior, not the pin lifecycle:
+        aether-arm still writes the pin and aether-disarm removes it.
       '';
     };
   };

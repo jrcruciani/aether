@@ -51,5 +51,8 @@ and the docs should name it.
 Fork, branch, pull request. Keep changes focused. If you touch the playbook, say in
 the PR description what problem you hit that made you want the change.
 
-There is no CI yet, because there is nothing to build. If you add Nix that is meant
-to evaluate, say whether you tested it on a real machine and which NixOS release.
+The rollback VM check runs in Linux GitHub Actions. With x86_64 Linux and KVM,
+`nix flake check --print-build-logs` runs it locally too. It uses the locked
+test-only nixpkgs input, not the package set of a host importing the module. If
+you add Nix that is meant to evaluate, say what you tested and on which NixOS
+release. A disposable VM run is not a live-host field note.

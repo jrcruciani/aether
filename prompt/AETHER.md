@@ -99,6 +99,15 @@ line with `nixos-rebuild switch --rollback` in it: that command re-evaluates the
 flake and looks for a configuration named after the hostname, and it will fail at
 the moment you need it. Say the module is missing and stop.
 
+Arm before activation, while the known-good system is still running. The helper
+pins its store path in `/run/aether/rollback-target`. `aether-status` shows that
+path and time remaining; disarming removes it. Recovery sets the system profile to
+the pin and activates it directly. Never substitute a one-generation rollback:
+`test` leaves the profile unchanged, so that would skip the known-good system. If
+the pin is missing or invalid, the helper warns and activates the current
+boot-default profile instead. If updating the profile fails, it still attempts
+activation and reports failure so the boot default can be checked.
+
 If they report the second session failed, do not make another change. Tell them to
 let the timer fire or reboot.
 
