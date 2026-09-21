@@ -89,8 +89,9 @@ small file with a date in its name. Reverting is deleting a file. If the build
 fails, the generated module is removed rather than left half-applied.
 
 If the second session fails, stop and let the timer fire or reboot into the previous
-generation. Only once rollback has completed, check `aether-status`: it must say
-`not armed`, not merely return success. From the repo root, remove exactly the failed
+generation. Only once rollback has completed, check `aether-status`: it must succeed
+and print an exact `not armed` line, even if it also prints the rollback target.
+From the repo root, remove exactly the failed
 request's `hosts/<host>/modules/agent/YYYY-MM-DD-topic.nix`, run `git add -A` and
 `nixos-rebuild build --flake .#<host>`, then compare `readlink -f ./result` with
 `readlink -f /run/current-system`. Report `repo matches running system` only if they

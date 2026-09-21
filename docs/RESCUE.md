@@ -94,16 +94,17 @@ request. Replace `<host>` and `YYYY-MM-DD-topic.nix` below with that host and fi
 not a wildcard. Do not clean unrelated dirty files. If other requests or unexplained
 changes are present, stop and tell the human before staging anything.
 
-`aether-status` must print `not armed` before removing the file. Its exit code alone
-is not a check: it can succeed while printing `ARMED`. The block checks the output
-and stops on command errors, including a failed build or an unreadable system path.
+`aether-status` must succeed and print an exact `not armed` line before removing the
+file; it may also print a rollback-target line. Its exit code alone is not a check:
+it can succeed while printing `ARMED`. The block checks for the exact line and stops
+on command errors, including a failed status check, build or unreadable system path.
 
 ```bash
 (
   set -e
   status=$(aether-status)
   printf '%s\n' "$status"
-  if [ "$status" != "not armed" ]; then
+  if ! printf '%s\n' "$status" | grep -Fxq 'not armed'; then
     printf '%s\n' 'stop: expected not armed; tell the human' >&2
     exit 1
   fi
