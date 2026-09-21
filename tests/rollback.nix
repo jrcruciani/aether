@@ -6,6 +6,8 @@
     services.aether.enable = true;
     services.openssh.enable = true;
     system.switch.enable = true;
+    # The test driver boots the kernel directly, without a bootloader disk.
+    boot.loader.grub.enable = false;
 
     specialisation.sshd-off.configuration = {
       services.openssh.enable = lib.mkForce false;
