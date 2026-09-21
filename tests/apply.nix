@@ -5,16 +5,18 @@ let
   aetherSource = lib.cleanSource ../.;
   packages = "{ pkgs, ... }: { environment.systemPackages = with pkgs; [ ripgrep fd ]; }";
   firewall = "{ networking.firewall.allowedTCPPorts = [ 8443 ]; }";
-  evaluate = extra: (nixosLib.evalTest {
+  evaluateConfig = extra: (nixosLib.evalTest {
     hostPkgs = pkgs;
     name = "aether-apply-fixture";
     nodes.machine.imports = [ ./apply-host.nix extra ];
     testScript = "";
-  }).config.nodes.machine.system.build.toplevel;
+  }).config.nodes.machine;
+  evaluate = extra: (evaluateConfig extra).system.build.toplevel;
   base = evaluate { };
-  tools = evaluate ({ pkgs, ... }: {
+  toolsConfig = evaluateConfig ({ pkgs, ... }: {
     environment.systemPackages = [ pkgs.ripgrep pkgs.fd ];
   });
+  tools = toolsConfig.system.build.toplevel;
   network = evaluate ({ pkgs, ... }: {
     environment.systemPackages = [ pkgs.ripgrep pkgs.fd ];
     networking.firewall.allowedTCPPorts = [ 8443 ];
@@ -54,6 +56,7 @@ in
     virtualisation.additionalPaths = [ pkgs.path aetherSource pkgs.e2fsprogs base tools network networkOnly ];
   };
   testScript = ''
+    import difflib
     import json
     import shlex
 
@@ -203,6 +206,26 @@ in
         before = head()
         propose(package_file, ${builtins.toJSON packages})
         machine.succeed(f"git -C {repo} add hosts/fixture/modules/agent/tools.nix")
+        expected_packages = ${builtins.toJSON (map toString toolsConfig.environment.systemPackages)}
+        actual_packages = json.loads(machine.succeed(
+            f"nix eval --json --no-update-lock-file {repo}#nixosConfigurations.fixture.config.environment.systemPackages "
+            "--apply 'ps: map toString ps'"
+        ))
+        assert expected_packages == actual_packages, "\n".join(difflib.unified_diff(
+            expected_packages, actual_packages, fromfile="preloaded", tofile="actual"))
+        actual_drv = machine.succeed(
+            f"nix eval --raw --no-update-lock-file {repo}#nixosConfigurations.fixture.config.system.build.toplevel.drvPath"
+        ).strip()
+        if actual_drv != "${tools.drvPath}":
+            print(machine.succeed(
+                "python3 -c " + shlex.quote(
+                    "import pathlib,re; "
+                    "paths=lambda p:set(re.findall(r'/nix/store/[^\"\\s]+',pathlib.Path(p).read_text())); "
+                    f"a=paths('${tools.drvPath}');b=paths('{actual_drv}'); "
+                    "print('preloaded-only:',sorted(a-b)); print('actual-only:',sorted(b-a))"
+                )
+            ))
+            raise AssertionError(f"fixture preload differs: ${tools.drvPath} != {actual_drv}")
         output = run("build")
         assert "effective risk R1" in output, output
         candidate = machine.succeed("readlink -f /etc/nixos/result").strip()
