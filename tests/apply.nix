@@ -177,6 +177,7 @@ in
 
     with subtest("R1 ripgrep and fd build and switch exact staged/new module"):
         before = head()
+        before_running = running()
         propose(package_file, ${builtins.toJSON packages})
         machine.succeed(f"git -C {repo} add hosts/fixture/modules/agent/tools.nix")
         expected_packages = ${builtins.toJSON (map toString toolsConfig.environment.systemPackages)}
@@ -192,6 +193,9 @@ in
         assert actual_drv == "${tools.drvPath}", f"fixture preload differs: ${tools.drvPath} != {actual_drv}"
         output = run("build")
         assert "effective risk R1" in output, output
+        assert "ripgrep:" in output and "fd:" in output, output
+        assert running() == before_running
+        print(output)
         candidate = machine.succeed("readlink -f /etc/nixos/result").strip()
         assert head() == before
         run("switch")

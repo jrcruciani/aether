@@ -61,6 +61,8 @@
     cores = 2;
     memorySize = 3072;
     diskSize = 8192;
+    # Flake fetches must survive reboot, as they do in a real host's Nix store.
+    writableStoreUseTmpfs = false;
   };
   system.stateVersion = "26.05";
 }
