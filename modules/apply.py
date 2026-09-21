@@ -341,7 +341,7 @@ def principal():
 
 def environment(config):
     return {
-        "PATH": config["path"], "HOME": "/var/empty", "LC_ALL": "C.UTF-8",
+        "PATH": config["path"], "HOME": str(STATE / "home"), "LC_ALL": "C.UTF-8",
         "TERM": "dumb", "GIT_CONFIG_NOSYSTEM": "1",
         "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_SYSTEM": "/dev/null",
         "GIT_OPTIONAL_LOCKS": "0", "NIX_USER_CONF_FILES": "/dev/null",
@@ -377,7 +377,7 @@ def git_text(config, repo, *args):
 
 
 def private_directories():
-    for directory in (RUN, STATE, STATE / "candidates"):
+    for directory in (RUN, STATE, STATE / "candidates", STATE / "home"):
         directory.mkdir(mode=0o700, exist_ok=True)
         info = directory.lstat()
         if not stat.S_ISDIR(info.st_mode) or info.st_uid != 0 or info.st_mode & 0o077:
@@ -1119,7 +1119,10 @@ def main():
         elif operation == "worker" and len(arguments) == 1:
             worker(config, arguments[0])
         elif operation == "index-preflight" and not arguments:
-            setup(config)
+            root_required()
+            if config.get("agent"):
+                setup(config)
+            private_directories()
         else:
             raise Error("unsupported helper arguments")
     except (Error, OSError, ValueError, KeyError, subprocess.TimeoutExpired) as exc:

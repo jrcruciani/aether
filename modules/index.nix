@@ -33,12 +33,10 @@ let
         echo "aether: ERROR: expected flake.nix and flake.lock in $flake; lock the host's inputs before generating its index." >&2
         exit 1
       fi
-      ${lib.optionalString (cfg.agentUser != null) ''
-        python3 -I ${./apply.py} ${preflight} index-preflight
-      ''}
+      python3 -I ${./apply.py} ${preflight} index-preflight
 
       status=0
-      env -i PATH=${lib.escapeShellArg (lib.makeBinPath runtime)} HOME=/var/empty \
+      env -i PATH=${lib.escapeShellArg (lib.makeBinPath runtime)} HOME=/var/lib/aether/home \
         GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null \
         NIX_USER_CONF_FILES=/dev/null \
         nix --extra-experimental-features 'nix-command flakes' --no-accept-flake-config build \

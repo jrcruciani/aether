@@ -124,6 +124,7 @@ class Policy(unittest.TestCase):
         }):
             env = apply.environment({"path": "/declared/tools"})
         self.assertEqual(env["PATH"], "/declared/tools")
+        self.assertEqual(env["HOME"], str(apply.STATE / "home"))
         for key in ("GIT_CONFIG_COUNT", "GIT_SSH_COMMAND", "NIX_REMOTE", "PYTHONPATH", "BASH_ENV"):
             self.assertNotIn(key, env)
         self.assertIn("accept-flake-config = false", env["NIX_CONFIG"])
