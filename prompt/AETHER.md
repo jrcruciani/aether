@@ -74,22 +74,25 @@ If the build fails, delete the module you generated. Do not leave it staged.
 
 ## Hardened protocol, R3
 
-```bash
-git add -A
-nix flake check
-nixos-rebuild build --flake .#<host>
-git commit -m "<what and why>"
+Stage and build the module, but do not commit it yet. `git add -A` is enough for
+Nix to see it. Stop if any command fails.
 
-aether-arm 10min
+```bash
+git add -A &&
+nix flake check &&
+nixos-rebuild build --flake .#<host> &&
+aether-arm 10min &&
 systemd-run --scope --collect --unit=rb-$(date +%s) nixos-rebuild test --flake .#<host>
 ```
 
 Then stop and tell the human to open a second SSH session, keeping the current one
-open, and confirm they can still log in. Wait for their answer. Only after they
-confirm:
+open, and confirm they can still log in. Wait for their explicit answer. Never
+confirm on their behalf. Only after they confirm, disarm successfully, then commit,
+then switch. If disarming fails, stop; do not commit or switch.
 
 ```bash
-aether-disarm
+aether-disarm &&
+git commit -m "<what and why>" &&
 systemd-run --scope --collect --unit=rb-$(date +%s) nixos-rebuild switch --flake .#<host>
 ```
 
@@ -101,6 +104,51 @@ the moment you need it. Say the module is missing and stop.
 
 If they report the second session failed, do not make another change. Tell them to
 let the timer fire or reboot.
+
+### Recovery after a failed second session
+
+Only after the timer has fired and rollback has completed, or the machine has
+rebooted into the previous generation, recover the repo. An inactive timer alone
+does not prove rollback completed. Do not disarm early to enter this branch.
+
+From the repo root, inspect `git status --short` and identify the exact module from
+the failed request. Replace `<host>` and `YYYY-MM-DD-topic.nix` below with that host
+and file, not a wildcard. Do not clean unrelated dirty files. If other requests or
+unexplained changes are present, stop and tell the human before staging anything.
+
+`aether-status` must succeed and print an exact `not armed` line before removing the
+file; it may also print a rollback-target line. Its exit code alone is not a check:
+it can succeed while printing `ARMED`. The block checks for the exact line and stops
+on command errors, including a failed status check, build or unreadable system path.
+
+```bash
+(
+  set -e
+  status=$(aether-status)
+  printf '%s\n' "$status"
+  if ! printf '%s\n' "$status" | grep -Fxq 'not armed'; then
+    printf '%s\n' 'stop: expected not armed; tell the human' >&2
+    exit 1
+  fi
+
+  rm -- hosts/<host>/modules/agent/YYYY-MM-DD-topic.nix
+  git add -A
+  nixos-rebuild build --flake .#<host>
+  built=$(readlink -f ./result)
+  running=$(readlink -f /run/current-system)
+  if [ "$built" = "$running" ]; then
+    printf '%s\n' 'repo matches running system'
+  else
+    printf '%s\n' 'repo and running system DIVERGE' >&2
+    exit 1
+  fi
+)
+```
+
+Report the result to the human and stop. If the build fails, show the error. If the
+paths differ, say `repo and running system DIVERGE`. Neither failure permits a
+follow-on commit or activation. Even a match only completes recovery; it does not
+approve another attempt at the failed request.
 
 ## Verbs
 
@@ -120,6 +168,11 @@ can be killed mid-activation, and a half-applied system is worse than either sta
 
 Never infer confirmation. A yes covers one change, not a category, and not a repeat
 of a similar change later.
+
+After a failed R3 test rolls back, the repository must build to exactly the running
+system: `readlink -f ./result` must equal `readlink -f /run/current-system`. Do not
+commit, activate, or start another change until this invariant holds. A failed
+build or a mismatch means stop and tell the human, not switch to make them agree.
 
 Never touch the emergency user or the firewall rule that admits it without triple
 explicit confirmation.
