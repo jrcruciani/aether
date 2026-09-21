@@ -48,9 +48,10 @@ let
 in
 {
   name = "aether-apply";
+  globalTimeout = 1800;
   nodes.machine = {
     imports = [ ./apply-host.nix ];
-    virtualisation.additionalPaths = [ pkgs.path aetherSource base tools network networkOnly ];
+    virtualisation.additionalPaths = [ pkgs.path aetherSource pkgs.e2fsprogs base tools network networkOnly ];
   };
   testScript = ''
     import json
@@ -69,7 +70,7 @@ in
     timer = "deadman-rollback.timer"
 
     def agent(command, fail=False):
-        shell = "su -s /bin/sh agent -c " + shlex.quote(command) + " 2>&1"
+        shell = "timeout 300s su -s /bin/sh agent -c " + shlex.quote(command) + " < /dev/null 2>&1"
         return (machine.fail if fail else machine.succeed)(shell)
 
     def propose(path, text):
@@ -131,7 +132,7 @@ in
 
     def human_confirm(fail=False):
         command = (
-            "ssh -i /root/human-key -o StrictHostKeyChecking=no "
+            "ssh -i /root/human-key -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=no "
             "-o UserKnownHostsFile=/dev/null human@localhost "
             + shlex.quote("sudo -n " + confirm)
         )
@@ -144,7 +145,7 @@ in
             "nix-env --profile /nix/var/nix/profiles/system --set " + fixture_base,
         ):
             agent("sudo -n " + command, fail=True)
-        agent("rm " + proposals + "/default.nix", fail=True)
+        agent("rm -f " + proposals + "/default.nix", fail=True)
         agent("printf bad > " + proposals + "/default.nix", fail=True)
         agent(f"sudo -n NIX_REMOTE=ssh://invalid {apply} build", fail=True)
         agent(f"env -i PATH=/missing /run/wrappers/bin/sudo -n {apply} build")
@@ -166,6 +167,7 @@ in
             propose(proposals + "/refused.nix", body)
             error = run("build", fail=True)
             assert "manual" in error, error
+            assert "+" + body in error, error
             after = machine.succeed(
                 f"git -C {repo} write-tree; git -C {repo} rev-parse HEAD; "
                 "readlink -f /etc/nixos/result; sha256sum /run/aether/candidate.json"
@@ -326,6 +328,45 @@ in
         assert head() == before
         machine.succeed("rm /run/fail-candidate")
         clean_failed()
+
+    with subtest("profile update failure still activates recovery but cannot clear the gate"):
+        before = head()
+        propose(firewall_file, ${builtins.toJSON firewall})
+        run("test")
+        broken_profile = running()
+        cursor = machine.succeed(
+            "journalctl --sync && journalctl -n 0 --show-cursor --no-pager"
+        ).split("-- cursor: ", 1)[1].strip()
+        machine.succeed(
+            f"nix-env --profile {profile} --set {broken_profile} && "
+            "${pkgs.e2fsprogs}/bin/chattr +i /nix/var/nix/profiles"
+        )
+        machine.wait_until_succeeds(
+            f"test \"$(readlink -f /run/current-system)\" = {good} && "
+            "test ! -e /run/aether/recovering.json && "
+            "! systemctl is-active --quiet deadman-rollback.timer",
+            timeout=180,
+        )
+        machine.wait_for_unit("sshd.service")
+        assert pending()["recovered"] is False
+        assert head() == before
+        machine.succeed(f"test \"$(readlink -f {profile})\" = {broken_profile}")
+        journal = machine.succeed(
+            "journalctl --sync && journalctl -u deadman-rollback.service "
+            f"--after-cursor={shlex.quote(cursor)} --no-pager --output=cat"
+        )
+        assert "failed to set system profile" in journal, journal
+        assert "attempting recovery activation anyway" in journal, journal
+        assert "recovery activation finished, but the system profile update failed" in journal, journal
+        agent("rm -- " + firewall_file)
+        error = run("build", fail=True)
+        assert "boot-default profile still differs" in error, error
+        machine.succeed("test -e /var/lib/aether/pending.json")
+        machine.succeed(
+            "${pkgs.e2fsprogs}/bin/chattr -i /nix/var/nix/profiles && "
+            f"nix-env --profile {profile} --set {good}"
+        )
+        assert "repo matches running system" in run("build")
 
     with subtest("reboot destroys approval, preserves recovery gate and checks equality"):
         # Direct-boot tests reboot their original init, not a bootloader generation.

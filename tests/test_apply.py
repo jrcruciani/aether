@@ -153,6 +153,36 @@ class Policy(unittest.TestCase):
             with self.subTest(args=args), self.assertRaisesRegex(apply.Error, "only once"):
                 apply.apply({}, args)
 
+    def test_refused_diff_shows_new_removed_and_staged_source_without_git(self):
+        view = {
+            "changed": ["new.nix", "removed.nix", "staged.nix"],
+            "contents": {"new.nix": b"{ users.users.new.isNormalUser = true; }\n"},
+            "sources": [
+                ("HEAD:removed.nix", "{ security.sudo.enable = true; }\n"),
+                (":staged.nix", "{ swapDevices = []; }\n"),
+            ],
+        }
+        rendered = apply.refusal_diff(view)
+        self.assertIn("+{ users.users.new.isNormalUser = true; }", rendered)
+        self.assertIn("-{ security.sudo.enable = true; }", rendered)
+        self.assertIn("+++ index:staged.nix", rendered)
+        self.assertIn("+{ swapDevices = []; }", rendered)
+        self.assertIn("truncated", apply.refusal_diff(view, max_lines=2))
+        view["contents"]["new.nix"] = b"# \x1b[2J\n{ users.users.new.isNormalUser = true; }\n"
+        self.assertNotIn("\x1b", apply.refusal_diff(view))
+        self.assertIn("\\x1b", apply.refusal_diff(view))
+
+    def test_unsafe_boot_profile_blocks_recovery_before_building(self):
+        pending = {"id": "transaction", "baseline": "/nix/store/good"}
+        with patch.object(apply, "recovery_quiet", return_value=True), \
+                patch.object(apply, "active", return_value=False), \
+                patch.object(apply, "canonical_system", side_effect=["/nix/store/good", "/nix/store/bad"]), \
+                patch.object(apply, "console_recovery"), \
+                patch.object(apply, "frozen_candidate") as build:
+            with self.assertRaisesRegex(apply.Error, "boot-default profile still differs"):
+                apply.recovery_build({}, None, None, None, None, 1000, pending)
+            build.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

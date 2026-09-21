@@ -180,7 +180,10 @@ sudo aether-apply build
 ```
 
 The persistent recovery gate requires the freshly built repository path to equal
-`/run/current-system`. It prints `repo matches running system` only on equality.
+`/run/current-system`. Before that comparison, both the running system and
+boot-default profile must match the captured recovery target, with activation
+and recovery quiescent. A failed profile update needs human repair even if SSH
+returns. The helper prints `repo matches running system` only on equality.
 `repo and running system DIVERGE`, a failed build or incomplete recovery means
 stop: no commit, activation or new request. Do not switch to make them agree.
 Equality completes recovery; it does not authorize a retry.

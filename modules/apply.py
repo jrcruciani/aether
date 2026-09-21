@@ -3,6 +3,7 @@
 import argparse
 import contextlib
 import dataclasses
+import difflib
 import fcntl
 import hashlib
 import json
@@ -596,6 +597,31 @@ def show_risk(risk):
         print(f"  {reason}", flush=True)
 
 
+def refusal_diff(view, max_lines=200, max_chars=16384):
+    sources = dict(view["sources"])
+    output = []
+    size = 0
+    for name in view["changed"]:
+        old = sources.get("HEAD:" + name, "")
+        current = view["contents"].get(name, b"").decode("utf-8")
+        versions = [("worktree", current)]
+        staged = sources.get(":" + name)
+        if staged is not None and staged not in (old, current):
+            versions.append(("index", staged))
+        for label, new in versions:
+            for line in difflib.unified_diff(
+                    old.splitlines(), new.splitlines(),
+                    fromfile="HEAD:" + name, tofile=label + ":" + name, lineterm=""):
+                safe = "".join(char if char == "\t" or (ord(char) >= 32 and ord(char) != 127)
+                               else f"\\x{ord(char):02x}" for char in line)
+                if len(output) >= max_lines or size + len(safe) + 1 > max_chars:
+                    output.append("[diff truncated; review the complete source before any manual action]")
+                    return "\n".join(output)
+                output.append(safe)
+                size += len(safe) + 1
+    return "\n".join(output) or "[no source differences; the declared risk requires manual review]"
+
+
 def transfer_tree(config, source, destination, tree):
     pack = git(config, source, "pack-objects", "--stdout", "--revs",
                data=(tree + "\n").encode()).stdout
@@ -724,9 +750,13 @@ def finish(candidate):
 
 def recovery_build(config, repo, proposals, view, risk, caller, pending):
     if (not recovery_quiet(config) or
+            active(config, f"aether-apply-{pending['id']}.scope") or
             canonical_system("/run/current-system") != pending["baseline"]):
         console_recovery(pending)
         raise Error("rollback has not completed to the captured known-good system")
+    if canonical_system(PROFILE) != pending["baseline"]:
+        console_recovery(pending)
+        raise Error("boot-default profile still differs from the recovery system; a human must repair it first")
     candidate = frozen_candidate(config, repo, proposals, view, risk, caller)
     if candidate["system"] != canonical_system("/run/current-system"):
         revoke(pending)
@@ -800,7 +830,9 @@ def apply(config, arguments):
         print(f"aether: R4/manual refusal: {exc}", file=sys.stderr)
         for name in view["changed"]:
             print(f"  review module: {name}", file=sys.stderr)
-        print(f"  console review: git -C {shlex.quote(str(repo))} diff --no-ext-diff HEAD", file=sys.stderr)
+        print(refusal_diff(view), file=sys.stderr)
+        print(f"  console review: git -C {shlex.quote(str(repo))} diff --no-ext-diff --no-textconv HEAD",
+              file=sys.stderr)
         print("  console build after human review: nixos-rebuild build --flake " +
               shlex.quote(f"{repo}#{config['host']}") + " --no-update-lock-file", file=sys.stderr)
         print("No staging, build or activation was performed. A human must review and apply"

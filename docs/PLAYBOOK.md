@@ -158,7 +158,10 @@ sudo aether-apply build
 ```
 
 The persistent pending gate requires that fresh build to equal
-`/run/current-system`. Only equality prints `repo matches running system`.
+`/run/current-system`. First, the running system and boot-default profile must
+both equal the captured recovery target, with no active recovery/activation.
+If profile update failed but activation restored SSH, a human must repair the
+boot default before proceeding. Only equality prints `repo matches running system`.
 `repo and running system DIVERGE`, a failed build, incomplete recovery or
 unexplained dirty files means stop: no commit, activation or new request.
 Do not switch to make the paths agree. Equality is recovery, not approval to retry.

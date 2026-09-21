@@ -106,6 +106,9 @@ request's `hosts/<host>/modules/agent/YYYY-MM-DD-topic.nix` and run
 with `/run/current-system`: it prints `repo matches running system` only on
 equality, otherwise `repo and running system DIVERGE` and stops. A failed build
 also means stop, with no follow-on commit or activation.
+The recovered running system and boot-default profile must both match the
+captured known-good target first. Successful activation after a failed profile
+update does not clear that gate; a human must repair the boot default.
 Do not clean unrelated dirty files or stage another request's changes. The
 [post-rollback checklist](docs/RESCUE.md#post-rollback-checklist-for-a-failed-r3-test)
 has the guarded console commands. A match completes recovery, not approval to retry.

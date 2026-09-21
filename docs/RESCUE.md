@@ -121,7 +121,11 @@ follow-on commit or activation. Do not switch to make the paths agree. The repo 
 build to exactly the running system before any further change. A match completes
 recovery, not approval to retry; the agent never confirms on the human's behalf.
 
-The helper's pending marker survives reboot only to enforce this fresh-build
+The helper first requires both the running system and the boot-default profile
+to equal the captured recovery target, with recovery/activation quiescent. If the
+profile update failed but recovery activation succeeded, SSH returning is not
+enough: a human must repair the boot default before the gate can clear.
+The pending marker survives reboot only to enforce this fresh-build
 comparison. It does not preserve human approval. A successful build prints
 `repo matches running system` only if the paths are equal; a mismatch prints
 `repo and running system DIVERGE`. Do not remove state files to bypass that gate.

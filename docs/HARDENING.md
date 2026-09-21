@@ -121,8 +121,11 @@ policy is also R4. Deletions and staged definitions are scanned as well as new
 content. At least 40 nonempty closure-diff lines raises the floor to R3. None of
 these lexical rules proves that an accepted package or inherited setting is safe.
 
-R4/unsupported proposals return refusal status 4 and print module paths and
-human review/build instructions without staging, changing HEAD/result/state,
+R4/unsupported proposals return refusal status 4 and print a bounded unified diff
+of proposed, removed and staged source plus human review/build instructions.
+The diff is rendered in memory, without external Git drivers; terminal controls
+are escaped and truncation is explicit (200 lines or 16 KiB). This occurs without
+staging, changing HEAD/result/state,
 building or activating. Other errors return nonzero with their failing step.
 Kernel/initrd and **all `hardware.*` changes** can build, but `test`/`switch`
 refuse: a human must review the appropriate `boot` and reboot procedure. Hardware
@@ -201,8 +204,12 @@ sudo aether-status
 sudo aether-apply build
 ```
 
-The pending marker in `/var/lib/aether` survives reboot only to require the fresh
-repository build to equal `/run/current-system`. A mismatch prints
+The pending marker in `/var/lib/aether` survives reboot only to enforce recovery.
+Both the running system and boot-default profile must equal the captured
+known-good target, with no surviving apply worker or active recovery, before
+the fresh repository build is allowed to clear the gate. A failed profile update
+still attempts activation, but requires human profile repair even if SSH returns.
+The fresh build must then equal `/run/current-system`. A mismatch prints
 `repo and running system DIVERGE` and blocks further work. A match clears the
 recovery gate, not approval for a retry. No failed candidate is committed.
 
