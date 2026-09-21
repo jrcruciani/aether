@@ -75,8 +75,8 @@ Stage only the reviewed proposal so flakes can see it; do not commit yet. Keep
 the source and lock unchanged throughout, with no concurrent deployment:
 
 ```bash
-git add -- hosts/vps/modules/agent/YYYY-MM-DD-topic.nix
-nix flake check --no-update-lock-file
+git add -- hosts/vps/modules/agent/YYYY-MM-DD-topic.nix &&
+nix flake check --no-update-lock-file &&
 nixos-rebuild build --flake .#vps --no-update-lock-file
 ```
 
@@ -86,7 +86,7 @@ Prebuild to keep deployment within the rollback deadline. Run each step only if
 the previous one succeeded; save the known-good path printed by arm:
 
 ```bash
-ssh root@host aether-arm
+ssh root@host aether-arm &&
 nixos-rebuild test --flake .#vps --target-host root@host --build-host localhost --no-update-lock-file
 ```
 
