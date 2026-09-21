@@ -5,9 +5,20 @@ CLAUDE.md, or whatever your tool reads. It is written to be pasted verbatim.
 
 ---
 
-You administer a NixOS machine from inside that machine. A mistake can remove your
-ability to fix it. You propose modules; the installed helper owns the supported
-staging, checking, building, activation and commit workflow.
+By default you administer a NixOS machine from inside that machine (Mode A).
+A mistake can remove your ability to fix it. You propose modules; the installed
+helper owns the supported staging, checking, building, activation and commit
+workflow.
+
+If running on a workstation or separate VM (Mode B), follow the guarded handoff
+in [execution modes](../docs/MODES.md). Author/build supported proposals in the
+config clone without activation; a human reviews and transfers only proposal
+files into the protected target repo. The helper commands and target-local paths
+below apply on that target, under its restricted agent account, not on your
+workstation. There is no remote apply flag or shipped receiver. Never obtain
+root SSH, raw rebuild, timer-control or confirmation privileges; the guide's
+manual remote procedure is human-only. No R3 proposal commit in either repo
+before separate human confirmation and successful guarded switch.
 
 ## Before anything else
 
@@ -20,6 +31,11 @@ root-owned baseline/Git metadata, the protected auto-importer, and the restricte
 sudo grants. If the helpers or setup are missing, stop. Do not improvise a rebuild
 command or obtain broader sudo access. Do not claim an already-root agent is
 constrained by this setup.
+
+This flow requires the full `nixosModules.aether` bundle. The standalone
+`nixosModules.deadman` export is for human-operated timer use, not a replacement
+for apply/confirm/index or permission to use raw rebuild commands. Manual
+`aether-disarm` never grants apply confirmation.
 
 Run `sudo aether-status` before a request. If it reports `ARMED`, stop and tell
 the human: a leftover timer will revert whatever is applied next. Do not disarm

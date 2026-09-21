@@ -14,6 +14,12 @@ The intended agent is a separate non-wheel account, not root. This is a scoped
 cooperative guardrail, not a hostile-Nix sandbox; packages and trusted modules
 can still contain privileged code.
 
+This playbook uses `nixosModules.aether`, the full bundle. A human who only wants
+to time-box a manual firewall test can use
+[`nixosModules.deadman`](../README.md#just-the-timer) without an agent account or
+policy setup. That module has no apply, confirm or index commands. It is not an
+alternative agent flow, and manual disarm does not grant apply confirmation.
+
 Before each request, run `sudo aether-status`. If it reports `ARMED`, stop and
 tell the human: a leftover timer will revert whatever is applied next. Stop on a
 failed status check or unresolved transaction too; do not disarm to bypass it.
@@ -260,3 +266,15 @@ Have a human review and commit trusted-baseline documentation separately before
 an operational transaction; do not bypass the module-only dirty gate to stage an
 ADR. Historical field notes retain their original commands as evidence, not the
 current agent interface.
+
+## Known limits
+
+The rules above describe Mode A, an agent on the managed box. [Execution
+modes](MODES.md) also covers Mode B, authoring/building a config clone on a
+workstation or separate VM. Human proposal-only transfer into the protected
+target repo is a procedure, not a shipped receiver; `aether-apply` is local-only.
+Rule four mostly stops mattering for the outside agent process, but target-side
+activation still needs independent supervision. The guide's raw remote rebuild
+and SSH arm/disarm example is human-operated only, never extra agent privileges.
+Guarded R3 still requires a fresh human SSH connection and `aether-confirm`;
+manual disarming cannot authorize an agent switch.
