@@ -98,3 +98,18 @@ cleanup/build equality. All eight existing deadman subtests and both real
 25.05/25.11 options-index builds also passed. These are disposable direct-boot
 guests with exact preloaded fixture closures and a persistent writable Nix store,
 not bootloader or hostile-code-sandbox evidence; no timer was tested on a live host.
+
+## 06: document external execution modes
+
+I added [execution modes](MODES.md) and linked it from the README, playbook's Known
+limits and prompt. It separates today's on-box agent from an outside agent working
+in a config clone: proposal-only transfer is a human procedure, while target
+activation still uses guarded apply and a separate human confirmation. The
+explicit human-only remote rebuild example keeps arm before test, a fresh SSH
+connection and successful disarm before switch, with no early R3 commit or stale
+failed proposal left for reapplication. This avoids implying that local-only
+apply ships a remote receiver or that root SSH is an agent workaround. Evidence:
+a documentation command/flow walkthrough against the current helper and account
+contract, including supervision, success, rollback cleanup and repo/running
+equality, plus local link checks. No remote deployment, live-host test or VM rerun
+was performed for this documentation-only change.
